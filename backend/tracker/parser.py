@@ -93,7 +93,8 @@ def parse_statement_text(text: str, account_type: str):
                 if '.' not in amt:
                     try:
                         val_int = int(val_str)
-                        if val_int > 99999:
+                        # Ignore large reference numbers and year numbers
+                        if val_int > 99999 or (1990 <= val_int <= 2050):
                             continue
                     except ValueError:
                         pass
@@ -105,8 +106,10 @@ def parse_statement_text(text: str, account_type: str):
                     continue
                     
             if amounts:
-                pending_tx['amount'] = amounts[0][1]
+                # Second-to-last is Withdrawal/Deposit, last is Balance
+                pending_tx['amount'] = amounts[-2][1] if len(amounts) >= 2 else amounts[0][1]
                 pending_tx['type'] = determine_tx_type(line, account_type)
+
                 
         else:
             # This line does NOT have a date.
@@ -124,7 +127,8 @@ def parse_statement_text(text: str, account_type: str):
                         if '.' not in amt:
                             try:
                                 val_int = int(val_str)
-                                if val_int > 99999:
+                                # Ignore large reference numbers and year numbers
+                                if val_int > 99999 or (1990 <= val_int <= 2050):
                                     continue
                             except ValueError:
                                 pass
@@ -136,9 +140,11 @@ def parse_statement_text(text: str, account_type: str):
                             continue
                             
                     if amounts:
-                        pending_tx['amount'] = amounts[0][1]
+                        # Second-to-last is Withdrawal/Deposit, last is Balance
+                        pending_tx['amount'] = amounts[-2][1] if len(amounts) >= 2 else amounts[0][1]
                         full_desc_context = " ".join(pending_tx['raw_lines'])
                         pending_tx['type'] = determine_tx_type(full_desc_context, account_type)
+
                         
     # Flush the last pending transaction
     if pending_tx and pending_tx.get('amount') is not None:
