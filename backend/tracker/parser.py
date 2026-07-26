@@ -37,179 +37,131 @@ def auto_categorize(description: str, trans_type: str) -> str:
 
 def parse_statement_text(text: str, account_type: str):
     """
-    Parses transaction details from raw text statements (SBI, APGB, or Generic).
-    Supports multi-line layout where date/description and amounts are split.
+    Strict Bank Statement Parser for SBI, APGB, and Generic statements.
+    Extracts transactions by strictly identifying decimal monetary amounts (Withdrawals, Deposits, Balance)
+    and filtering out non-decimal reference numbers, years, and transaction IDs.
     """
     transactions = []
     lines = text.split('\n')
     
+    # Matches dates like 02-05-2026, 02/05/2026, 02-May-2026, 02 May 2026
     date_pattern = r'(\d{1,2}[-/\.\s](?:[a-zA-Z]{3}|\d{1,2})[-/\.\s]\d{2,4})'
     
-    pending_tx = None
-    
+    # Strictly matches monetary amounts with decimal points (e.g. 93.00, 1,250.50, 0.50)
+    # Does NOT match integers like reference numbers 499514807162 or years 2026
+    decimal_amount_pattern = r'\b\d{1,3}(?:,\d{3})*\.\d{2}\b|\b\d+\.\d{2}\b'
+
+    current_tx = None
+
     for line in lines:
         line = line.strip()
         if not line:
             continue
             
-        # Find dates in the line
+        # Ignore table headers and footer lines
+        if any(h in line.lower() for h in ['tran particulars', 'withdrawals', 'deposits', 'statement of account', 'generated on', 'page no']):
+            continue
+
         date_match = re.search(date_pattern, line)
-        
+
         if date_match:
-            # If we had a pending transaction, let's flush/save it if it has an amount
-            if pending_tx and pending_tx.get('amount') is not None:
-                transactions.append(pending_tx)
-                pending_tx = None
-                
+            # If we already had a transaction buffering, save it if valid
+            if current_tx and current_tx.get('amount') is not None:
+                transactions.append(current_tx)
+                current_tx = None
+
             date_str = date_match.group(1)
             parsed_date = None
-            for fmt in ('%d %b %Y', '%d-%b-%y', '%d-%b-%Y', '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y', '%d/%m/%y', '%d-%m-%y'):
+            for fmt in ('%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y', '%d %b %Y', '%d-%b-%Y', '%d-%b-%y', '%d/%m/%y'):
                 try:
-                    clean_date_str = re.sub(r'\s+', ' ', date_str).strip()
-                    parsed_date = datetime.strptime(clean_date_str, fmt).date()
+                    clean_date = re.sub(r'\s+', ' ', date_str).strip()
+                    parsed_date = datetime.strptime(clean_date, fmt).date()
                     break
                 except ValueError:
                     continue
-            
+
             if not parsed_date:
                 continue
-                
+
             remainder = line.replace(date_str, '', 1).strip()
-            
-            # Start a new pending transaction
-            pending_tx = {
+
+            current_tx = {
                 'date': parsed_date.strftime('%Y-%m-%d'),
-                'raw_lines': [remainder],
+                'desc_parts': [remainder],
                 'amount': None,
                 'type': 'EXPENSE',
                 'category': 'Other'
             }
-            
-            # Parse amounts from this initial line
-            amount_matches = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d{2})?\b', remainder)
-            amounts = []
-            for amt in amount_matches:
-                val_str = amt.replace(',', '')
-                if '.' not in amt:
-                    try:
-                        val_int = int(val_str)
-                        # Ignore large reference numbers and year numbers
-                        if val_int > 99999 or (1990 <= val_int <= 2050):
-                            continue
-                    except ValueError:
-                        pass
-                try:
-                    cleaned_amt = float(val_str)
-                    if cleaned_amt > 0.0:
-                        amounts.append((amt, cleaned_amt))
-                except ValueError:
-                    continue
-                    
-            if amounts:
-                # Second-to-last is Withdrawal/Deposit, last is Balance
-                pending_tx['amount'] = amounts[-2][1] if len(amounts) >= 2 else amounts[0][1]
-                pending_tx['type'] = determine_tx_type(line, account_type)
 
-                
+            # Check if decimal monetary values exist on this line
+            decimals = re.findall(decimal_amount_pattern, remainder)
+            if decimals:
+                valid_dec = [float(d.replace(',', '')) for d in decimals if float(d.replace(',', '')) > 0.0]
+                if valid_dec:
+                    # Transaction amount is the first decimal monetary value
+                    current_tx['amount'] = valid_dec[0]
+                    current_tx['type'] = determine_tx_type(remainder, account_type)
+
         else:
-            # This line does NOT have a date.
-            # If we have a pending transaction, check if we can extract the amount from this line,
-            # or append the text to the description
-            if pending_tx:
-                pending_tx['raw_lines'].append(line)
-                
-                # Check for amounts if not already found
-                if pending_tx['amount'] is None:
-                    amount_matches = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d{2})?\b', line)
-                    amounts = []
-                    for amt in amount_matches:
-                        val_str = amt.replace(',', '')
-                        if '.' not in amt:
-                            try:
-                                val_int = int(val_str)
-                                # Ignore large reference numbers and year numbers
-                                if val_int > 99999 or (1990 <= val_int <= 2050):
-                                    continue
-                            except ValueError:
-                                pass
-                        try:
-                            cleaned_amt = float(val_str)
-                            if cleaned_amt > 0.0:
-                                amounts.append((amt, cleaned_amt))
-                        except ValueError:
-                            continue
-                            
-                    if amounts:
-                        # Second-to-last is Withdrawal/Deposit, last is Balance
-                        pending_tx['amount'] = amounts[-2][1] if len(amounts) >= 2 else amounts[0][1]
-                        full_desc_context = " ".join(pending_tx['raw_lines'])
-                        pending_tx['type'] = determine_tx_type(full_desc_context, account_type)
+            # Line does not start with a date. It could be continuation of description or amount on next line.
+            if current_tx:
+                current_tx['desc_parts'].append(line)
 
-                        
-    # Flush the last pending transaction
-    if pending_tx and pending_tx.get('amount') is not None:
-        transactions.append(pending_tx)
-        
-    # Format and finalize transactions list
-    final_transactions = []
+                if current_tx['amount'] is None:
+                    decimals = re.findall(decimal_amount_pattern, line)
+                    if decimals:
+                        valid_dec = [float(d.replace(',', '')) for d in decimals if float(d.replace(',', '')) > 0.0]
+                        if valid_dec:
+                            current_tx['amount'] = valid_dec[0]
+                            full_context = " ".join(current_tx['desc_parts'])
+                            current_tx['type'] = determine_tx_type(full_context, account_type)
+
+    # Save the last transaction if valid
+    if current_tx and current_tx.get('amount') is not None:
+        transactions.append(current_tx)
+
+    # Finalize descriptions & categories
+    final_list = []
     for tx in transactions:
-        full_desc = " ".join(tx['raw_lines'])
-        
-        # Remove any numeric values that match the parsed amount or balance
-        all_nums = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d{2})?\b', full_desc)
-        for num in all_nums:
-            val_str = num.replace(',', '')
-            if '.' not in num:
-                try:
-                    if int(val_str) > 99999:
-                        continue
-                except ValueError:
-                    pass
-            full_desc = full_desc.replace(num, '')
-            
-        full_desc = re.sub(r'\s+', ' ', full_desc).strip()
-        full_desc = re.sub(r'^[-/,:\.\s]+|[-/,:\.\s]+$', '', full_desc).strip()
-        
-        if not full_desc:
-            full_desc = "Online Transaction"
-            
-        category = auto_categorize(full_desc, tx['type'])
-        
-        final_transactions.append({
+        raw_desc = " ".join(tx['desc_parts'])
+
+        # Remove decimal monetary values from description
+        clean_desc = re.sub(decimal_amount_pattern, '', raw_desc)
+        clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+        clean_desc = re.sub(r'^[-/,:\.\s]+|[-/,:\.\s]+$', '', clean_desc).strip()
+
+        if not clean_desc:
+            clean_desc = "Bank Transaction"
+
+        category = auto_categorize(clean_desc, tx['type'])
+
+        final_list.append({
             'date': tx['date'],
-            'description': full_desc,
+            'description': clean_desc,
             'amount': tx['amount'],
             'type': tx['type'],
             'category': category
         })
-        
-    return final_transactions
+
+    return final_list
 
 def determine_tx_type(text_context: str, account_type: str) -> str:
+    lower_ctx = text_context.lower()
+    
     # Check for UPI credit/debit keywords first
-    if 'upi/c/' in text_context.lower():
+    if 'upi/c/' in lower_ctx:
         return 'INCOME'
-    elif 'upi/d/' in text_context.lower():
+    elif 'upi/d/' in lower_ctx:
         return 'EXPENSE'
         
     # Check for general keywords
-    if account_type == 'SBI':
-        if 'cr' in text_context.lower() or 'credit' in text_context.lower() or 'by ' in text_context.lower() or 'deposit' in text_context.lower() or 'int.pd' in text_context.lower():
-            return 'INCOME'
-        elif 'dr' in text_context.lower() or 'debit' in text_context.lower() or 'to ' in text_context.lower() or 'withdrawal' in text_context.lower():
-            return 'EXPENSE'
-    elif account_type == 'APGB':
-        if 'cr' in text_context.lower() or 'credit' in text_context.lower() or 'dep' in text_context.lower() or 'by ' in text_context.lower():
-            return 'INCOME'
-        elif 'dr' in text_context.lower() or 'debit' in text_context.lower() or 'with' in text_context.lower() or 'to ' in text_context.lower():
-            return 'EXPENSE'
-    else:
-        if 'cr' in text_context.lower() or 'credit' in text_context.lower() or 'received' in text_context.lower() or 'refund' in text_context.lower() or 'salary' in text_context.lower():
-            return 'INCOME'
-        elif 'dr' in text_context.lower() or 'debit' in text_context.lower() or 'spent' in text_context.lower() or 'paid' in text_context.lower():
-            return 'EXPENSE'
+    if 'cr' in lower_ctx or 'credit' in lower_ctx or 'deposit' in lower_ctx or 'refund' in lower_ctx or 'int.pd' in lower_ctx or 'by ' in lower_ctx:
+        return 'INCOME'
+    elif 'dr' in lower_ctx or 'debit' in lower_ctx or 'withdrawal' in lower_ctx or 'chrg' in lower_ctx or 'to ' in lower_ctx:
+        return 'EXPENSE'
             
     return 'EXPENSE'
+
 
 
 def extract_text_from_pdf(pdf_file, password=None):
