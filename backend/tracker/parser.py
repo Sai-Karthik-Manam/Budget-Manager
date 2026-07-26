@@ -35,23 +35,53 @@ def auto_categorize(description: str, trans_type: str) -> str:
                 
     return 'Other'
 
+def extract_valid_amounts(text_snippet: str):
+    """
+    Extracts valid monetary amounts from a text snippet, ignoring reference numbers (10+ digits),
+    years (1990-2050), and zero values.
+    """
+    raw_matches = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d{1,2})?\b', text_snippet)
+    valid_amounts = []
+    
+    for match in raw_matches:
+        clean_str = match.replace(',', '')
+        
+        # Ignore reference numbers / UPI IDs / Phone numbers (10+ digits without decimal)
+        if len(clean_str) >= 10 and '.' not in clean_str:
+            continue
+            
+        try:
+            val = float(clean_str)
+            if val <= 0.0:
+                continue
+                
+            # Ignore standalone years (e.g. 1990 to 2050)
+            if '.' not in clean_str and 1990 <= int(clean_str) <= 2050:
+                continue
+                
+            valid_amounts.append((match, val))
+        except ValueError:
+            continue
+            
+    return valid_amounts
+
 def parse_statement_text(text: str, account_type: str):
     """
     Strict Bank Statement Parser for SBI, APGB, and Generic statements.
-    Extracts transactions by strictly identifying decimal monetary amounts (Withdrawals, Deposits, Balance)
-    and filtering out non-decimal reference numbers, years, and transaction IDs.
+    Extracts transactions by filtering out non-monetary numbers (UPI IDs, reference numbers, years)
+    and parsing valid integer/decimal transaction amounts.
     """
+    print(f"DEBUG_PARSER: Starting parse. Text length: {len(text)}. Account type: {account_type}")
+    print(f"DEBUG_PARSER: Sample text (first 500 chars):\n{text[:500]}")
+    
     transactions = []
     lines = text.split('\n')
     
     # Matches dates like 02-05-2026, 02/05/2026, 02-May-2026, 02 May 2026
     date_pattern = r'(\d{1,2}[-/\.\s](?:[a-zA-Z]{3}|\d{1,2})[-/\.\s]\d{2,4})'
-    
-    # Strictly matches monetary amounts with decimal points (e.g. 93.00, 1,250.50, 0.50)
-    # Does NOT match integers like reference numbers 499514807162 or years 2026
-    decimal_amount_pattern = r'\b\d{1,3}(?:,\d{3})*\.\d{2}\b|\b\d+\.\d{2}\b'
 
     current_tx = None
+    parsed_count = 0
 
     for line in lines:
         line = line.strip()
@@ -68,11 +98,12 @@ def parse_statement_text(text: str, account_type: str):
             # If we already had a transaction buffering, save it if valid
             if current_tx and current_tx.get('amount') is not None:
                 transactions.append(current_tx)
+                parsed_count += 1
                 current_tx = None
 
             date_str = date_match.group(1)
             parsed_date = None
-            for fmt in ('%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y', '%d %b %Y', '%d-%b-%Y', '%d-%b-%y', '%d/%m/%y'):
+            for fmt in ('%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y', '%d %b %Y', '%d-%b-%Y', '%d-%b-%y', '%d/%m/%y', '%d-%m-%y'):
                 try:
                     clean_date = re.sub(r'\s+', ' ', date_str).strip()
                     parsed_date = datetime.strptime(clean_date, fmt).date()
@@ -93,14 +124,11 @@ def parse_statement_text(text: str, account_type: str):
                 'category': 'Other'
             }
 
-            # Check if decimal monetary values exist on this line
-            decimals = re.findall(decimal_amount_pattern, remainder)
-            if decimals:
-                valid_dec = [float(d.replace(',', '')) for d in decimals if float(d.replace(',', '')) > 0.0]
-                if valid_dec:
-                    # Transaction amount is the first decimal monetary value
-                    current_tx['amount'] = valid_dec[0]
-                    current_tx['type'] = determine_tx_type(remainder, account_type)
+            # Check if valid monetary values exist on this line
+            valid_amounts = extract_valid_amounts(remainder)
+            if valid_amounts:
+                current_tx['amount'] = valid_amounts[0][1]
+                current_tx['type'] = determine_tx_type(remainder, account_type)
 
         else:
             # Line does not start with a date. It could be continuation of description or amount on next line.
@@ -108,25 +136,30 @@ def parse_statement_text(text: str, account_type: str):
                 current_tx['desc_parts'].append(line)
 
                 if current_tx['amount'] is None:
-                    decimals = re.findall(decimal_amount_pattern, line)
-                    if decimals:
-                        valid_dec = [float(d.replace(',', '')) for d in decimals if float(d.replace(',', '')) > 0.0]
-                        if valid_dec:
-                            current_tx['amount'] = valid_dec[0]
-                            full_context = " ".join(current_tx['desc_parts'])
-                            current_tx['type'] = determine_tx_type(full_context, account_type)
+                    valid_amounts = extract_valid_amounts(line)
+                    if valid_amounts:
+                        current_tx['amount'] = valid_amounts[0][1]
+                        full_context = " ".join(current_tx['desc_parts'])
+                        current_tx['type'] = determine_tx_type(full_context, account_type)
 
     # Save the last transaction if valid
     if current_tx and current_tx.get('amount') is not None:
         transactions.append(current_tx)
+        parsed_count += 1
+
+    print(f"DEBUG_PARSER: Finished parse. Total transactions extracted: {parsed_count}")
 
     # Finalize descriptions & categories
     final_list = []
     for tx in transactions:
         raw_desc = " ".join(tx['desc_parts'])
 
-        # Remove decimal monetary values from description
-        clean_desc = re.sub(decimal_amount_pattern, '', raw_desc)
+        # Remove monetary values from description
+        clean_desc = raw_desc
+        valid_amounts = extract_valid_amounts(clean_desc)
+        for match_str, _ in valid_amounts:
+            clean_desc = clean_desc.replace(match_str, '')
+            
         clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
         clean_desc = re.sub(r'^[-/,:\.\s]+|[-/,:\.\s]+$', '', clean_desc).strip()
 
@@ -145,6 +178,7 @@ def parse_statement_text(text: str, account_type: str):
 
     return final_list
 
+
 def determine_tx_type(text_context: str, account_type: str) -> str:
     lower_ctx = text_context.lower()
     
@@ -161,6 +195,7 @@ def determine_tx_type(text_context: str, account_type: str) -> str:
         return 'EXPENSE'
             
     return 'EXPENSE'
+
 
 
 
