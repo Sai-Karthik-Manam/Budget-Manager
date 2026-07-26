@@ -81,8 +81,12 @@ export default function App() {
   // Statement Parser state
   const [statementText, setStatementText] = useState('');
   const [statementAccount, setStatementAccount] = useState('SBI');
+  const [importMode, setImportMode] = useState('TEXT'); // 'TEXT' or 'FILE'
+  const [statementFile, setStatementFile] = useState(null);
+  const [pdfPassword, setPdfPassword] = useState('');
   const [parsedTransactions, setParsedTransactions] = useState([]);
   const [showParserModal, setShowParserModal] = useState(false);
+
 
   // Filters state
   const [accountFilter, setAccountFilter] = useState('ALL');
@@ -248,30 +252,55 @@ export default function App() {
     }
   };
 
-  // Parse Statement Text
+  // Parse Statement
   const handleParseStatement = async () => {
-    if (!statementText.trim()) {
+    if (importMode === 'TEXT' && !statementText.trim()) {
       alert('Please paste some statement text first.');
       return;
     }
+    if (importMode === 'FILE' && !statementFile) {
+      alert('Please select a statement file.');
+      return;
+    }
+
     const token = localStorage.getItem('wealth_sense_token');
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/parse-statement/`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          text: statementText,
-          account: statementAccount
-        })
-      });
-      if (!res.ok) throw new Error('Failed to parse statement');
+      let res;
+      if (importMode === 'FILE') {
+        const formData = new FormData();
+        formData.append('file', statementFile);
+        formData.append('account', statementAccount);
+        if (pdfPassword) {
+          formData.append('password', pdfPassword);
+        }
+        res = await fetch(`${API_BASE}/parse-statement/`, {
+          method: 'POST',
+          headers: { 
+            'Authorization': `Bearer ${token}`
+          },
+          body: formData
+        });
+      } else {
+        res = await fetch(`${API_BASE}/parse-statement/`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            text: statementText,
+            account: statementAccount
+          })
+        });
+      }
+      
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to parse statement');
+      }
       if (data.length === 0) {
-        alert('Could not find any transactions in the pasted text. Please verify the format.');
+        alert('Could not find any transactions. Please verify the format/password.');
       } else {
         setParsedTransactions(data);
       }
@@ -281,6 +310,7 @@ export default function App() {
       setLoading(false);
     }
   };
+
 
   // Confirm Import parsed transactions
   const handleImportParsed = async () => {
@@ -899,10 +929,15 @@ export default function App() {
             <div className="flex items-center justify-between border-b border-[#232D45] px-6 py-4">
               <div className="flex items-center gap-2">
                 <Upload className="h-5 w-5 text-blue-400" />
-                <h3 className="text-lg font-bold text-white">Import Bank Statement Text</h3>
+                <h3 className="text-lg font-bold text-white">Import Bank Statement</h3>
               </div>
               <button 
-                onClick={() => { setShowParserModal(false); setParsedTransactions([]); }} 
+                onClick={() => { 
+                  setShowParserModal(false); 
+                  setParsedTransactions([]); 
+                  setStatementFile(null); 
+                  setPdfPassword(''); 
+                }} 
                 className="text-gray-400 hover:text-white p-1 rounded-lg transition-colors"
               >
                 <X className="h-5 w-5" />
@@ -919,7 +954,10 @@ export default function App() {
                       <BookOpen className="h-4 w-4 text-blue-400" /> Instructions
                     </h4>
                     <p className="text-gray-300 text-xs leading-relaxed">
-                      Copy transaction lines directly from your bank's internet banking statement PDF/text, and paste them in the text box.
+                      Upload your statement PDF/Text directly or paste the transaction lines from your banking portal.
+                    </p>
+                    <p className="text-gray-300 text-xs leading-relaxed">
+                      If uploading an encrypted bank PDF, enter the decryption password in the field provided.
                     </p>
                     <div className="flex flex-col gap-2.5">
                       <div className="text-xs text-gray-400 font-semibold uppercase">Supported formats:</div>
@@ -935,7 +973,29 @@ export default function App() {
                   </div>
 
                   <div className="md:col-span-2 flex flex-col gap-4">
-                    <div className="grid grid-cols-2 gap-4">
+                    {/* Toggle Import Mode */}
+                    <div className="flex bg-[#0F172A] p-1.5 rounded-xl border border-[#232D45] gap-1">
+                      <button 
+                        type="button"
+                        onClick={() => setImportMode('TEXT')}
+                        className={`flex-1 text-center py-2 text-xs font-semibold rounded-lg transition-all ${
+                          importMode === 'TEXT' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        Paste Statement Text
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setImportMode('FILE')}
+                        className={`flex-1 text-center py-2 text-xs font-semibold rounded-lg transition-all ${
+                          importMode === 'FILE' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                        }`}
+                      >
+                        Upload Statement File
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-semibold text-gray-400 mb-1.5">Choose Bank Account</label>
                         <select 
@@ -948,22 +1008,62 @@ export default function App() {
                           <option value="GENERIC">Generic Text / CSV Format</option>
                         </select>
                       </div>
+
+                      {importMode === 'FILE' && (
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-400 mb-1.5">PDF Password (if encrypted)</label>
+                          <input 
+                            type="password" 
+                            placeholder="Password to open statement" 
+                            value={pdfPassword}
+                            onChange={(e) => setPdfPassword(e.target.value)}
+                            className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                          />
+                        </div>
+                      )}
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-400 mb-1.5">Paste Statement Text</label>
-                      <textarea 
-                        rows="10"
-                        placeholder="Paste transaction logs from your statement here..."
-                        value={statementText}
-                        onChange={(e) => setStatementText(e.target.value)}
-                        className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl p-3.5 font-mono text-xs text-white focus:outline-none focus:border-blue-500 transition-all"
-                      ></textarea>
-                    </div>
+                    {importMode === 'TEXT' ? (
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-400 mb-1.5">Paste Statement Text</label>
+                        <textarea 
+                          rows="8"
+                          placeholder="Paste transaction logs from your statement here..."
+                          value={statementText}
+                          onChange={(e) => setStatementText(e.target.value)}
+                          className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl p-3.5 font-mono text-xs text-white focus:outline-none focus:border-blue-500 transition-all"
+                        ></textarea>
+                      </div>
+                    ) : (
+                      <div className="border border-dashed border-[#232D45] bg-[#0F172A]/50 rounded-xl p-8 flex flex-col items-center justify-center text-center gap-3">
+                        <Upload className="h-8 w-8 text-gray-500" />
+                        <div>
+                          <label className="cursor-pointer bg-[#1E293B] hover:bg-[#2D3748] text-white px-4 py-2 rounded-lg text-xs font-semibold transition-all inline-block">
+                            Select Statement File
+                            <input 
+                              type="file" 
+                              accept=".pdf,.txt,.csv" 
+                              className="hidden" 
+                              onChange={(e) => setStatementFile(e.target.files[0])}
+                            />
+                          </label>
+                          <p className="text-[10px] text-gray-500 mt-2">Supports PDF, TXT or CSV files</p>
+                        </div>
+                        {statementFile && (
+                          <div className="bg-blue-600/10 border border-blue-500/20 text-blue-400 text-xs px-3.5 py-1.5 rounded-lg font-medium mt-1">
+                            Selected: {statementFile.name} ({(statementFile.size / 1024).toFixed(1)} KB)
+                          </div>
+                        )}
+                      </div>
+                    )}
 
-                    <div className="flex justify-end gap-3">
+                    <div className="flex justify-end gap-3 pt-2">
                       <button 
-                        onClick={() => setShowParserModal(false)}
+                        onClick={() => {
+                          setShowParserModal(false);
+                          setStatementFile(null);
+                          setPdfPassword('');
+                        }}
                         className="bg-[#1E293B] hover:bg-[#2D3748] px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
                       >
                         Cancel
@@ -980,6 +1080,7 @@ export default function App() {
 
                   </div>
                 </div>
+
               ) : (
                 <div className="flex flex-col gap-4">
                   <div className="bg-blue-600/10 border border-blue-500/20 text-blue-400 p-3.5 rounded-xl text-xs flex items-center justify-between">

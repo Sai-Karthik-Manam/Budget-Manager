@@ -163,3 +163,38 @@ def parse_statement_text(text: str, account_type: str):
         })
         
     return transactions
+
+def extract_text_from_pdf(pdf_file, password=None):
+    """
+    Given a file-like object (or path) of a PDF, decrypts it using the password (if provided)
+    and extracts text from all pages.
+    """
+    import pypdf
+    try:
+        reader = pypdf.PdfReader(pdf_file)
+        if reader.is_encrypted:
+            if not password:
+                raise ValueError("PDF is encrypted. Please provide a password.")
+            
+            # Try to decrypt
+            decrypt_result = reader.decrypt(password)
+            if decrypt_result == 0:
+                raise ValueError("Incorrect password for PDF.")
+        
+        # Verify access to pages
+        try:
+            num_pages = len(reader.pages)
+        except Exception:
+            raise ValueError("Incorrect password for PDF.")
+
+        text = ""
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text += t + "\n"
+        return text
+    except Exception as e:
+        if "password" in str(e).lower() or "decrypt" in str(e).lower() or "encrypted" in str(e).lower():
+            raise ValueError("Incorrect password for PDF.")
+        raise ValueError(f"Failed to process PDF: {str(e)}")
+

@@ -7,7 +7,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import render
 from django.utils.dateparse import parse_date
 from .models import Transaction
-from .parser import parse_statement_text, auto_categorize
+from .parser import parse_statement_text, auto_categorize, extract_text_from_pdf
+
 
 # In-memory active session tokens
 ACTIVE_SESSIONS = set()
@@ -127,18 +128,34 @@ def parse_statement(request):
         
     if request.method == 'POST':
         try:
-            body = json.loads(request.body)
-            text = body.get('text', '')
-            account = body.get('account', 'SBI')
-            
-            if not text:
-                return JsonResponse({'error': 'No text provided'}, status=400)
+            # Check for file upload
+            if request.FILES:
+                file_obj = request.FILES.get('file')
+                password = request.POST.get('password', None)
+                account = request.POST.get('account', 'SBI')
+                
+                if not file_obj:
+                    return JsonResponse({'error': 'No file uploaded'}, status=400)
+                    
+                file_name = file_obj.name.lower()
+                if file_name.endswith('.pdf'):
+                    text = extract_text_from_pdf(file_obj, password)
+                else:
+                    text = file_obj.read().decode('utf-8', errors='ignore')
+            else:
+                body = json.loads(request.body)
+                text = body.get('text', '')
+                account = body.get('account', 'SBI')
+                
+            if not text or not text.strip():
+                return JsonResponse({'error': 'No text extracted or provided'}, status=400)
                 
             parsed_transactions = parse_statement_text(text, account)
             return JsonResponse(parsed_transactions, safe=False)
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)
     return JsonResponse({'error': 'Method not allowed'}, status=405)
+
 
 @csrf_exempt
 def bulk_import(request):

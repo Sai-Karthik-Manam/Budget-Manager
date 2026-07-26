@@ -1,0 +1,17 @@
+# Virtual environment
+backend/venv/
+
+# Local sensitive environment vars
+backend/.env
+
+# Local database
+backend/db.sqlite3
+
+# Static files folder created during collectstatic
+backend/staticfiles/
+
+# Frontend dependencies
+frontend/node_modules/
+
+# Built assets are kept to run directly on pythonanywhere
+# frontend/dist/
