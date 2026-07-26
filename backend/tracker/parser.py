@@ -38,15 +38,14 @@ def auto_categorize(description: str, trans_type: str) -> str:
 def parse_statement_text(text: str, account_type: str):
     """
     Parses transaction details from raw text statements (SBI, APGB, or Generic).
-    Returns a list of dictionaries with keys: date, description, amount, type, category
+    Supports multi-line layout where date/description and amounts are split.
     """
     transactions = []
     lines = text.split('\n')
     
-    # Common date regexes:
-    # 1. 26 Jul 2026 or 26-Jul-26 or 26-Jul-2026
-    # 2. 26/07/2026 or 26-07-2026 or 26.07.2026
     date_pattern = r'(\d{1,2}[-/\.\s](?:[a-zA-Z]{3}|\d{1,2})[-/\.\s]\d{2,4})'
+    
+    pending_tx = None
     
     for line in lines:
         line = line.strip()
@@ -55,131 +54,157 @@ def parse_statement_text(text: str, account_type: str):
             
         # Find dates in the line
         date_match = re.search(date_pattern, line)
-        if not date_match:
-            continue
-            
-        date_str = date_match.group(1)
         
-        # Standardize the date
-        parsed_date = None
-        for fmt in ('%d %b %Y', '%d-%b-%y', '%d-%b-%Y', '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y', '%d/%m/%y', '%d-%m-%y'):
-            try:
-                # Clean multiple spaces/dots
-                clean_date_str = re.sub(r'\s+', ' ', date_str).strip()
-                parsed_date = datetime.strptime(clean_date_str, fmt).date()
-                break
-            except ValueError:
+        if date_match:
+            # If we had a pending transaction, let's flush/save it if it has an amount
+            if pending_tx and pending_tx.get('amount') is not None:
+                transactions.append(pending_tx)
+                pending_tx = None
+                
+            date_str = date_match.group(1)
+            parsed_date = None
+            for fmt in ('%d %b %Y', '%d-%b-%y', '%d-%b-%Y', '%d/%m/%Y', '%d-%m-%Y', '%d.%m.%Y', '%d/%m/%y', '%d-%m-%y'):
+                try:
+                    clean_date_str = re.sub(r'\s+', ' ', date_str).strip()
+                    parsed_date = datetime.strptime(clean_date_str, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            
+            if not parsed_date:
                 continue
                 
-        if not parsed_date:
-            # Skip if we couldn't parse the date format
-            continue
+            remainder = line.replace(date_str, '', 1).strip()
             
-        # Remove date from the line to parse other columns
-        remainder = line.replace(date_str, '', 1).strip()
-        
-        # Find all monetary values in the remainder
-        # E.g. 1,234.50 or 500.00 or 15000
-        # Positive and negative, ignoring commas
-        amount_matches = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d{2})?\b', remainder)
-        
-        if not amount_matches:
-            continue
+            # Start a new pending transaction
+            pending_tx = {
+                'date': parsed_date.strftime('%Y-%m-%d'),
+                'raw_lines': [remainder],
+                'amount': None,
+                'type': 'EXPENSE',
+                'category': 'Other'
+            }
             
-        # Typically in bank statements:
-        # SBI/APGB formats list Withdrawal, Deposit, and Balance (sometimes only Withdrawal and Deposit).
-        # We need to distinguish credit vs debit.
-        # Let's clean the amount matches:
-        amounts = []
-        for amt in amount_matches:
-            val_str = amt.replace(',', '')
-            # If it's a large integer without a decimal point, ignore it (reference number/UPI ID)
-            if '.' not in amt:
+            # Parse amounts from this initial line
+            amount_matches = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d{2})?\b', remainder)
+            amounts = []
+            for amt in amount_matches:
+                val_str = amt.replace(',', '')
+                if '.' not in amt:
+                    try:
+                        val_int = int(val_str)
+                        if val_int > 99999:
+                            continue
+                    except ValueError:
+                        pass
                 try:
-                    val_int = int(val_str)
-                    if val_int > 99999:
+                    cleaned_amt = float(val_str)
+                    if cleaned_amt > 0.0:
+                        amounts.append((amt, cleaned_amt))
+                except ValueError:
+                    continue
+                    
+            if amounts:
+                pending_tx['amount'] = amounts[0][1]
+                pending_tx['type'] = determine_tx_type(line, account_type)
+                
+        else:
+            # This line does NOT have a date.
+            # If we have a pending transaction, check if we can extract the amount from this line,
+            # or append the text to the description
+            if pending_tx:
+                pending_tx['raw_lines'].append(line)
+                
+                # Check for amounts if not already found
+                if pending_tx['amount'] is None:
+                    amount_matches = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d{2})?\b', line)
+                    amounts = []
+                    for amt in amount_matches:
+                        val_str = amt.replace(',', '')
+                        if '.' not in amt:
+                            try:
+                                val_int = int(val_str)
+                                if val_int > 99999:
+                                    continue
+                            except ValueError:
+                                pass
+                        try:
+                            cleaned_amt = float(val_str)
+                            if cleaned_amt > 0.0:
+                                amounts.append((amt, cleaned_amt))
+                        except ValueError:
+                            continue
+                            
+                    if amounts:
+                        pending_tx['amount'] = amounts[0][1]
+                        full_desc_context = " ".join(pending_tx['raw_lines'])
+                        pending_tx['type'] = determine_tx_type(full_desc_context, account_type)
+                        
+    # Flush the last pending transaction
+    if pending_tx and pending_tx.get('amount') is not None:
+        transactions.append(pending_tx)
+        
+    # Format and finalize transactions list
+    final_transactions = []
+    for tx in transactions:
+        full_desc = " ".join(tx['raw_lines'])
+        
+        # Remove any numeric values that match the parsed amount or balance
+        all_nums = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d{2})?\b', full_desc)
+        for num in all_nums:
+            val_str = num.replace(',', '')
+            if '.' not in num:
+                try:
+                    if int(val_str) > 99999:
                         continue
                 except ValueError:
                     pass
-            try:
-                cleaned_amt = float(val_str)
-                if cleaned_amt > 0.0:
-                    amounts.append((amt, cleaned_amt))
-            except ValueError:
-                continue
-
-
-                
-        if not amounts:
-            continue
+            full_desc = full_desc.replace(num, '')
             
-        # Clean description by removing the amounts
-        desc = remainder
-        for amt_str, _ in amounts:
-            desc = desc.replace(amt_str, '')
-        # Remove extra symbols, commas, trailing spaces
-        desc = re.sub(r'\s+', ' ', desc).strip()
-        desc = re.sub(r'^[-/,:\.\s]+|[-/,:\.\s]+$', '', desc).strip()
+        full_desc = re.sub(r'\s+', ' ', full_desc).strip()
+        full_desc = re.sub(r'^[-/,:\.\s]+|[-/,:\.\s]+$', '', full_desc).strip()
         
-        if not desc:
-            desc = "Online Transaction"
+        if not full_desc:
+            full_desc = "Online Transaction"
             
-        # Deduce transaction type and amount:
-        # If we have 3 amounts (Withdrawal, Deposit, Balance or similar):
-        # We'll need to figure out which is which based on the bank rules or placement.
-        # For now, let's look at the remaining line content to see if it contains "Cr" or "Dr",
-        # or if we can extract it.
-        # Typically, a statement line might look like:
-        # "26 Jul 2026  UPI/O/1234/SBI  500.00  10500.00" -> withdrawal of 500, balance 10500
-        # Or: "26 Jul 2026 UPI/O/1234/SBI 500.00 Cr 10500.00" -> credit of 500
+        category = auto_categorize(full_desc, tx['type'])
         
-        trans_type = 'EXPENSE'
-        trans_amount = 0.0
-        
-        # Check for UPI credit/debit keywords first
-        if 'upi/c/' in line.lower():
-            trans_type = 'INCOME'
-        elif 'upi/d/' in line.lower():
-            trans_type = 'EXPENSE'
-        else:
-            # Specific SBI checking
-            if account_type == 'SBI':
-                if 'cr' in line.lower() or 'credit' in line.lower() or 'by ' in line.lower() or 'deposit' in line.lower():
-                    trans_type = 'INCOME'
-                elif 'dr' in line.lower() or 'debit' in line.lower() or 'to ' in line.lower() or 'withdrawal' in line.lower():
-                    trans_type = 'EXPENSE'
-            # APGB checking
-            elif account_type == 'APGB':
-                if 'cr' in line.lower() or 'credit' in line.lower() or 'dep' in line.lower() or 'by ' in line.lower():
-                    trans_type = 'INCOME'
-                elif 'dr' in line.lower() or 'debit' in line.lower() or 'with' in line.lower() or 'to ' in line.lower():
-                    trans_type = 'EXPENSE'
-            else:
-                # Generic heuristics
-                if 'cr' in line.lower() or 'credit' in line.lower() or 'received' in line.lower() or 'refund' in line.lower() or 'salary' in line.lower():
-                    trans_type = 'INCOME'
-                elif 'dr' in line.lower() or 'debit' in line.lower() or 'spent' in line.lower() or 'paid' in line.lower():
-                    trans_type = 'EXPENSE'
-
-                
-        # Choose amount: usually the first amount is the transaction value, and the second is the balance.
-        # Let's pick the first amount.
-        trans_amount = amounts[0][1]
-        
-        # In case the text has "SBI" style double columns like "   500.00       " vs "       500.00  "
-        # We can analyze the spacing or order if needed, but the user can review/edit before final import.
-        # Let's write the transaction:
-        category = auto_categorize(desc, trans_type)
-        
-        transactions.append({
-            'date': parsed_date.strftime('%Y-%m-%d'),
-            'description': desc,
-            'amount': trans_amount,
-            'type': trans_type,
+        final_transactions.append({
+            'date': tx['date'],
+            'description': full_desc,
+            'amount': tx['amount'],
+            'type': tx['type'],
             'category': category
         })
         
-    return transactions
+    return final_transactions
+
+def determine_tx_type(text_context: str, account_type: str) -> str:
+    # Check for UPI credit/debit keywords first
+    if 'upi/c/' in text_context.lower():
+        return 'INCOME'
+    elif 'upi/d/' in text_context.lower():
+        return 'EXPENSE'
+        
+    # Check for general keywords
+    if account_type == 'SBI':
+        if 'cr' in text_context.lower() or 'credit' in text_context.lower() or 'by ' in text_context.lower() or 'deposit' in text_context.lower() or 'int.pd' in text_context.lower():
+            return 'INCOME'
+        elif 'dr' in text_context.lower() or 'debit' in text_context.lower() or 'to ' in text_context.lower() or 'withdrawal' in text_context.lower():
+            return 'EXPENSE'
+    elif account_type == 'APGB':
+        if 'cr' in text_context.lower() or 'credit' in text_context.lower() or 'dep' in text_context.lower() or 'by ' in text_context.lower():
+            return 'INCOME'
+        elif 'dr' in text_context.lower() or 'debit' in text_context.lower() or 'with' in text_context.lower() or 'to ' in text_context.lower():
+            return 'EXPENSE'
+    else:
+        if 'cr' in text_context.lower() or 'credit' in text_context.lower() or 'received' in text_context.lower() or 'refund' in text_context.lower() or 'salary' in text_context.lower():
+            return 'INCOME'
+        elif 'dr' in text_context.lower() or 'debit' in text_context.lower() or 'spent' in text_context.lower() or 'paid' in text_context.lower():
+            return 'EXPENSE'
+            
+    return 'EXPENSE'
+
 
 def extract_text_from_pdf(pdf_file, password=None):
     """
