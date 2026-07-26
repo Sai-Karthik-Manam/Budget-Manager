@@ -92,13 +92,16 @@ def parse_statement_text(text: str, account_type: str):
         # Let's clean the amount matches:
         amounts = []
         for amt in amount_matches:
+            # Ignore large integers (like 10-18 digit reference numbers / UPI IDs)
+            if len(amt) >= 10 and '.' not in amt:
+                continue
             try:
                 cleaned_amt = float(amt.replace(',', ''))
-                # Avoid matching small numbers like reference numbers or transaction IDs
                 if cleaned_amt > 0.0:
                     amounts.append((amt, cleaned_amt))
             except ValueError:
                 continue
+
                 
         if not amounts:
             continue
@@ -126,24 +129,31 @@ def parse_statement_text(text: str, account_type: str):
         trans_type = 'EXPENSE'
         trans_amount = 0.0
         
-        # Specific SBI checking
-        if account_type == 'SBI':
-            if 'cr' in line.lower() or 'credit' in line.lower() or 'by ' in line.lower() or 'deposit' in line.lower():
-                trans_type = 'INCOME'
-            elif 'dr' in line.lower() or 'debit' in line.lower() or 'to ' in line.lower() or 'withdrawal' in line.lower():
-                trans_type = 'EXPENSE'
-        # APGB checking
-        elif account_type == 'APGB':
-            if 'cr' in line.lower() or 'credit' in line.lower() or 'dep' in line.lower() or 'by ' in line.lower():
-                trans_type = 'INCOME'
-            elif 'dr' in line.lower() or 'debit' in line.lower() or 'with' in line.lower() or 'to ' in line.lower():
-                trans_type = 'EXPENSE'
+        # Check for UPI credit/debit keywords first
+        if 'upi/c/' in line.lower():
+            trans_type = 'INCOME'
+        elif 'upi/d/' in line.lower():
+            trans_type = 'EXPENSE'
         else:
-            # Generic heuristics
-            if 'cr' in line.lower() or 'credit' in line.lower() or 'received' in line.lower() or 'refund' in line.lower() or 'salary' in line.lower():
-                trans_type = 'INCOME'
-            elif 'dr' in line.lower() or 'debit' in line.lower() or 'spent' in line.lower() or 'paid' in line.lower():
-                trans_type = 'EXPENSE'
+            # Specific SBI checking
+            if account_type == 'SBI':
+                if 'cr' in line.lower() or 'credit' in line.lower() or 'by ' in line.lower() or 'deposit' in line.lower():
+                    trans_type = 'INCOME'
+                elif 'dr' in line.lower() or 'debit' in line.lower() or 'to ' in line.lower() or 'withdrawal' in line.lower():
+                    trans_type = 'EXPENSE'
+            # APGB checking
+            elif account_type == 'APGB':
+                if 'cr' in line.lower() or 'credit' in line.lower() or 'dep' in line.lower() or 'by ' in line.lower():
+                    trans_type = 'INCOME'
+                elif 'dr' in line.lower() or 'debit' in line.lower() or 'with' in line.lower() or 'to ' in line.lower():
+                    trans_type = 'EXPENSE'
+            else:
+                # Generic heuristics
+                if 'cr' in line.lower() or 'credit' in line.lower() or 'received' in line.lower() or 'refund' in line.lower() or 'salary' in line.lower():
+                    trans_type = 'INCOME'
+                elif 'dr' in line.lower() or 'debit' in line.lower() or 'spent' in line.lower() or 'paid' in line.lower():
+                    trans_type = 'EXPENSE'
+
                 
         # Choose amount: usually the first amount is the transaction value, and the second is the balance.
         # Let's pick the first amount.
