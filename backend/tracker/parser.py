@@ -92,15 +92,22 @@ def parse_statement_text(text: str, account_type: str):
         # Let's clean the amount matches:
         amounts = []
         for amt in amount_matches:
-            # Ignore large integers (like 10-18 digit reference numbers / UPI IDs)
-            if len(amt) >= 10 and '.' not in amt:
-                continue
+            val_str = amt.replace(',', '')
+            # If it's a large integer without a decimal point, ignore it (reference number/UPI ID)
+            if '.' not in amt:
+                try:
+                    val_int = int(val_str)
+                    if val_int > 99999:
+                        continue
+                except ValueError:
+                    pass
             try:
-                cleaned_amt = float(amt.replace(',', ''))
+                cleaned_amt = float(val_str)
                 if cleaned_amt > 0.0:
                     amounts.append((amt, cleaned_amt))
             except ValueError:
                 continue
+
 
                 
         if not amounts:
