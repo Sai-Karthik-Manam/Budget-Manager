@@ -523,8 +523,8 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#090D16] text-[#F3F4F6] pb-12">
       {/* Top Banner */}
-      <header className="border-b border-[#1E293B] bg-[#0F172A]/80 backdrop-blur-md sticky top-0 z-10 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <header className="border-b border-[#1E293B] bg-[#0F172A]/80 backdrop-blur-md sticky top-0 z-10 px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-3 w-full sm:w-auto">
           <div className="bg-blue-600 p-2.5 rounded-xl shadow-lg shadow-blue-500/20">
             <Wallet className="h-6 w-6 text-white" />
           </div>
@@ -536,10 +536,10 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 sm:gap-3 w-full sm:w-auto">
           <button 
             onClick={fetchData} 
-            className="flex items-center gap-1.5 bg-[#1E293B] hover:bg-[#2D3748] px-3.5 py-2 rounded-xl text-sm font-medium transition-all"
+            className="flex items-center gap-1.5 bg-[#1E293B] hover:bg-[#2D3748] px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs sm:text-sm font-medium transition-all"
             disabled={loading}
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -548,7 +548,7 @@ export default function App() {
           
           <button 
             onClick={() => setShowParserModal(true)} 
-            className="flex items-center gap-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 px-4 py-2 rounded-xl text-sm font-medium shadow-md shadow-indigo-500/10 transition-all"
+            className="flex items-center gap-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm font-medium shadow-md shadow-indigo-500/10 transition-all"
           >
             <Upload className="h-4 w-4" />
             Import Statements
@@ -559,7 +559,7 @@ export default function App() {
             className="p-2 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/30 rounded-xl text-red-400 transition-all"
             title="Logout"
           >
-            <LogOut className="h-5 w-5" />
+            <LogOut className="h-4 w-4 sm:h-5 sm:w-5" />
           </button>
         </div>
       </header>
@@ -690,79 +690,6 @@ export default function App() {
         {/* Right column (lg:col-span-2) - Charts, manual add, Ledger */}
         <div className="lg:col-span-2 flex flex-col gap-8">
           
-          {/* Interactive Visualizations */}
-          <div className="glass-panel p-6 rounded-2xl flex flex-col gap-6">
-            <div className="flex justify-between items-center">
-              <h3 className="text-base font-bold text-white">Financial Analytics</h3>
-              <span className="text-xs text-gray-400">Realtime Charts</span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Income vs Spent Bar Chart */}
-              <div className="flex flex-col gap-2">
-                <span className="text-xs text-gray-400 font-medium">Income vs Expense Trend</span>
-                <div className="h-64 w-full bg-[#1E293B]/20 rounded-xl p-2 border border-[#232D45]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={monthlyChartData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#232D45" />
-                      <XAxis dataKey="month" stroke="#94A3B8" fontSize={11} />
-                      <YAxis stroke="#94A3B8" fontSize={11} />
-                      <Tooltip contentStyle={{ backgroundColor: '#1E293B', border: '1px solid #232D45' }} />
-                      <Legend verticalAlign="top" height={36} />
-                      <Bar dataKey="income" name="Income" fill="#10B981" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="expense" name="Expense" fill="#EF4444" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Expense Category Pie/Doughnut Chart */}
-              <div className="flex flex-col gap-2">
-                <span className="text-xs text-gray-400 font-medium">Expenses by Category</span>
-                <div className="h-64 w-full bg-[#1E293B]/20 rounded-xl p-2 border border-[#232D45] flex items-center justify-center relative">
-                  {insights.categories.length === 0 ? (
-                    <span className="text-sm text-gray-500">No expense records found</span>
-                  ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center">
-                      <ResponsiveContainer width="100%" height="90%">
-                        <PieChart>
-                          <Pie
-                            data={insights.categories}
-                            dataKey="amount"
-                            nameKey="category"
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={50}
-                            outerRadius={70}
-                            paddingAngle={4}
-                          >
-                            {insights.categories.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip contentStyle={{ backgroundColor: '#1E293B', border: '1px solid #232D45' }} />
-                        </PieChart>
-                      </ResponsiveContainer>
-                      
-                      {/* Short Custom Legend */}
-                      <div className="flex flex-wrap gap-x-3 gap-y-1 justify-center text-[10px] max-h-12 overflow-y-auto px-2">
-                        {insights.categories.slice(0, 4).map((entry, index) => (
-                          <div key={index} className="flex items-center gap-1">
-                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></span>
-                            <span className="text-gray-400">{entry.category}: ₹{entry.amount.toFixed(0)}</span>
-                          </div>
-                        ))}
-                        {insights.categories.length > 4 && (
-                          <span className="text-gray-500">+{insights.categories.length - 4} more</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* Quick Manual Add Form */}
           <div className="glass-panel p-6 rounded-2xl flex flex-col gap-5">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
@@ -851,6 +778,79 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+
+          {/* Interactive Visualizations */}
+          <div className="glass-panel p-6 rounded-2xl flex flex-col gap-6">
+            <div className="flex justify-between items-center">
+              <h3 className="text-base font-bold text-white">Financial Analytics</h3>
+              <span className="text-xs text-gray-400">Realtime Charts</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Income vs Spent Bar Chart */}
+              <div className="flex flex-col gap-2">
+                <span className="text-xs text-gray-400 font-medium">Income vs Expense Trend</span>
+                <div className="h-64 w-full bg-[#1E293B]/20 rounded-xl p-2 border border-[#232D45]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={monthlyChartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#232D45" />
+                      <XAxis dataKey="month" stroke="#94A3B8" fontSize={11} />
+                      <YAxis stroke="#94A3B8" fontSize={11} />
+                      <Tooltip contentStyle={{ backgroundColor: '#1E293B', border: '1px solid #232D45' }} />
+                      <Legend verticalAlign="top" height={36} />
+                      <Bar dataKey="income" name="Income" fill="#10B981" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="expense" name="Expense" fill="#EF4444" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Expense Category Pie/Doughnut Chart */}
+              <div className="flex flex-col gap-2">
+                <span className="text-xs text-gray-400 font-medium">Expenses by Category</span>
+                <div className="h-64 w-full bg-[#1E293B]/20 rounded-xl p-2 border border-[#232D45] flex items-center justify-center relative">
+                  {insights.categories.length === 0 ? (
+                    <span className="text-sm text-gray-500">No expense records found</span>
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center">
+                      <ResponsiveContainer width="100%" height="90%">
+                        <PieChart>
+                          <Pie
+                            data={insights.categories}
+                            dataKey="amount"
+                            nameKey="category"
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={50}
+                            outerRadius={70}
+                            paddingAngle={4}
+                          >
+                            {insights.categories.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip contentStyle={{ backgroundColor: '#1E293B', border: '1px solid #232D45' }} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      
+                      {/* Short Custom Legend */}
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 justify-center text-[10px] max-h-12 overflow-y-auto px-2">
+                        {insights.categories.slice(0, 4).map((entry, index) => (
+                          <div key={index} className="flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></span>
+                            <span className="text-gray-400">{entry.category}: ₹{entry.amount.toFixed(0)}</span>
+                          </div>
+                        ))}
+                        {insights.categories.length > 4 && (
+                          <span className="text-gray-500">+{insights.categories.length - 4} more</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Interactive Ledger */}
