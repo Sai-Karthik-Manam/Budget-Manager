@@ -272,3 +272,120 @@ def extract_text_from_pdf(pdf_file, password: Optional[str] = None) -> str:
         if 'password' in message or 'decrypt' in message or 'encrypted' in message:
             raise ValueError("Incorrect password for PDF.")
         raise ValueError(f"Failed to process PDF: {exc}")
+
+def parse_excel_or_csv(file_obj):
+    """
+    Parses transactions from uploaded Excel (.xlsx, .xls) or CSV (.csv) files.
+    Expected columns: date, category, credit, debit, description (optional).
+    """
+    import csv
+    from datetime import timedelta
+    from openpyxl import load_workbook
+    
+    transactions = []
+    file_name = file_obj.name.lower()
+    
+    if file_name.endswith('.csv'):
+        # Parse CSV
+        decoded_file = file_obj.read().decode('utf-8-sig', errors='ignore').splitlines()
+        reader = csv.DictReader(decoded_file)
+        if not reader.fieldnames:
+            raise ValueError("Empty or invalid CSV file.")
+            
+        for row in reader:
+            # Normalize keys to lowercase/stripped
+            normalized_row = {k.lower().strip() if k else '': v.strip() if v else '' for k, v in row.items()}
+            date_val = normalized_row.get('date', '')
+            category_val = normalized_row.get('category', 'Other')
+            desc_val = normalized_row.get('description', '')
+            credit_val = normalized_row.get('credit', '0')
+            debit_val = normalized_row.get('debit', '0')
+            
+            processed = process_row_data(date_val, category_val, desc_val, credit_val, debit_val)
+            if processed:
+                transactions.append(processed)
+                
+    elif file_name.endswith(('.xlsx', '.xls')):
+        # Parse Excel
+        wb = load_workbook(file_obj, read_only=True)
+        sheet = wb.active
+        
+        headers = []
+        rows = []
+        for r_idx, row in enumerate(sheet.iter_rows(values_only=True)):
+            if r_idx == 0:
+                headers = [str(cell).lower().strip() if cell is not None else '' for cell in row]
+            else:
+                if any(cell is not None for cell in row):
+                    row_dict = {}
+                    for c_idx, cell in enumerate(row):
+                        if c_idx < len(headers) and headers[c_idx]:
+                            row_dict[headers[c_idx]] = str(cell).strip() if cell is not None else ''
+                    rows.append(row_dict)
+                    
+        for r in rows:
+            date_val = r.get('date', '')
+            category_val = r.get('category', 'Other')
+            desc_val = r.get('description', '')
+            credit_val = r.get('credit', '0')
+            debit_val = r.get('debit', '0')
+            
+            processed = process_row_data(date_val, category_val, desc_val, credit_val, debit_val)
+            if processed:
+                transactions.append(processed)
+                
+    return transactions
+
+def process_row_data(date_val, category_val, desc_val, credit_val, debit_val):
+    from datetime import timedelta
+    if not date_val:
+        return None
+        
+    parsed_date = None
+    clean_date_str = date_val.split(' ')[0] # remove time component if any
+    
+    # Try parsing normal string dates
+    for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%Y/%m/%d', '%d.%m.%Y', '%d-%b-%Y', '%d-%b-%y', '%y-%m-%d'):
+        try:
+            parsed_date = datetime.strptime(clean_date_str, fmt).date()
+            break
+        except ValueError:
+            continue
+            
+    if not parsed_date:
+        # Check if it's an Excel serial date number
+        try:
+            days = int(float(clean_date_str))
+            # Excel start date is 1899-12-30 due to 1900 leap year bug
+            start = datetime(1899, 12, 30)
+            parsed_date = (start + timedelta(days=days)).date()
+        except ValueError:
+            return None
+            
+    # Parse credit & debit
+    try:
+        credit = float(credit_val.replace(',', '')) if credit_val else 0.0
+    except ValueError:
+        credit = 0.0
+        
+    try:
+        debit = float(debit_val.replace(',', '')) if debit_val else 0.0
+    except ValueError:
+        debit = 0.0
+        
+    if credit > 0:
+        amount = credit
+        tx_type = 'INCOME'
+    elif debit > 0:
+        amount = debit
+        tx_type = 'EXPENSE'
+    else:
+        return None
+        
+    return {
+        'date': parsed_date.strftime('%Y-%m-%d'),
+        'description': desc_val if desc_val else f"{category_val} Transaction",
+        'amount': amount,
+        'type': tx_type,
+        'category': category_val if category_val else 'Other'
+    }

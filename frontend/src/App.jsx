@@ -79,13 +79,15 @@ export default function App() {
   });
 
   // Statement Parser state
-  const [statementText, setStatementText] = useState('');
   const [statementAccount, setStatementAccount] = useState('SBI');
-  const [importMode, setImportMode] = useState('TEXT'); // 'TEXT' or 'FILE'
+  const [importMode, setImportMode] = useState('MANUAL'); // 'MANUAL' or 'FILE'
   const [statementFile, setStatementFile] = useState(null);
-  const [pdfPassword, setPdfPassword] = useState('');
   const [parsedTransactions, setParsedTransactions] = useState([]);
   const [showParserModal, setShowParserModal] = useState(false);
+  const [manualRows, setManualRows] = useState([
+    { date: new Date().toISOString().split('T')[0], category: 'Other', description: '', credit: '', debit: '' }
+  ]);
+
 
 
   // Filters state
@@ -252,64 +254,96 @@ export default function App() {
     }
   };
 
-  // Parse Statement
-  const handleParseStatement = async () => {
-    if (importMode === 'TEXT' && !statementText.trim()) {
-      alert('Please paste some statement text first.');
-      return;
-    }
-    if (importMode === 'FILE' && !statementFile) {
-      alert('Please select a statement file.');
-      return;
-    }
+  const handleAddManualRow = () => {
+    setManualRows([...manualRows, {
+      date: new Date().toISOString().split('T')[0],
+      category: 'Other',
+      description: '',
+      credit: '',
+      debit: ''
+    }]);
+  };
 
-    const token = localStorage.getItem('wealth_sense_token');
-    setLoading(true);
-    try {
-      let res;
-      if (importMode === 'FILE') {
+  const handleUpdateManualRow = (idx, field, value) => {
+    const updated = [...manualRows];
+    updated[idx] = { ...updated[idx], [field]: value };
+    setManualRows(updated);
+  };
+
+  const handleDeleteManualRow = (idx) => {
+    const updated = manualRows.filter((_, i) => i !== idx);
+    setManualRows(updated.length > 0 ? updated : [{
+      date: new Date().toISOString().split('T')[0],
+      category: 'Other',
+      description: '',
+      credit: '',
+      debit: ''
+    }]);
+  };
+
+  // Parse Statement (CSV/Excel upload or Manual Grid processing)
+  const handleParseStatement = async () => {
+    if (importMode === 'FILE') {
+      if (!statementFile) {
+        alert('Please select an Excel or CSV file first.');
+        return;
+      }
+
+      const token = localStorage.getItem('wealth_sense_token');
+      setLoading(true);
+      try {
         const formData = new FormData();
         formData.append('file', statementFile);
-        formData.append('account', statementAccount);
-        if (pdfPassword) {
-          formData.append('password', pdfPassword);
-        }
-        res = await fetch(`${API_BASE}/parse-statement/`, {
+        
+        const res = await fetch(`${API_BASE}/parse-statement/`, {
           method: 'POST',
           headers: { 
             'Authorization': `Bearer ${token}`
           },
           body: formData
         });
-      } else {
-        res = await fetch(`${API_BASE}/parse-statement/`, {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            text: statementText,
-            account: statementAccount
-          })
+        
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'Failed to parse file');
+        }
+        if (data.length === 0) {
+          alert('Could not find any valid transaction rows in the uploaded file. Please check columns.');
+        } else {
+          setParsedTransactions(data);
+        }
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      // Manual rows processing
+      const validRows = [];
+      for (const row of manualRows) {
+        const credit = parseFloat(row.credit) || 0;
+        const debit = parseFloat(row.debit) || 0;
+        
+        if (!row.date) continue;
+        if (credit === 0 && debit === 0) continue;
+        
+        validRows.push({
+          date: row.date,
+          description: row.description || `${row.category} Manual Transaction`,
+          amount: credit > 0 ? credit : debit,
+          type: credit > 0 ? 'INCOME' : 'EXPENSE',
+          category: row.category || 'Other'
         });
       }
       
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to parse statement');
+      if (validRows.length === 0) {
+        alert('Please enter at least one valid manual transaction with an amount.');
+        return;
       }
-      if (data.length === 0) {
-        alert('Could not find any transactions. Please verify the format/password.');
-      } else {
-        setParsedTransactions(data);
-      }
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setLoading(false);
+      setParsedTransactions(validRows);
     }
   };
+
 
 
   // Confirm Import parsed transactions
@@ -916,11 +950,8 @@ export default function App() {
               </table>
             </div>
           </div>
-
         </div>
-
       </main>
-
       {/* Statement Importer Modal */}
       {showParserModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
@@ -929,14 +960,13 @@ export default function App() {
             <div className="flex items-center justify-between border-b border-[#232D45] px-6 py-4">
               <div className="flex items-center gap-2">
                 <Upload className="h-5 w-5 text-blue-400" />
-                <h3 className="text-lg font-bold text-white">Import Bank Statement</h3>
+                <h3 className="text-lg font-bold text-white">Import Transactions</h3>
               </div>
               <button 
                 onClick={() => { 
                   setShowParserModal(false); 
                   setParsedTransactions([]); 
                   setStatementFile(null); 
-                  setPdfPassword(''); 
                 }} 
                 className="text-gray-400 hover:text-white p-1 rounded-lg transition-colors"
               >
@@ -947,140 +977,234 @@ export default function App() {
             <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
               
               {parsedTransactions.length === 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="flex flex-col gap-6">
                   
-                  <div className="md:col-span-1 bg-[#1E293B]/20 border border-[#232D45] rounded-xl p-5 flex flex-col gap-4 text-sm">
-                    <h4 className="font-semibold text-white flex items-center gap-1.5">
-                      <BookOpen className="h-4 w-4 text-blue-400" /> Instructions
-                    </h4>
-                    <p className="text-gray-300 text-xs leading-relaxed">
-                      Upload your statement PDF/Text directly or paste the transaction lines from your banking portal.
-                    </p>
-                    <p className="text-gray-300 text-xs leading-relaxed">
-                      If uploading an encrypted bank PDF, enter the decryption password in the field provided.
-                    </p>
-                    <div className="flex flex-col gap-2.5">
-                      <div className="text-xs text-gray-400 font-semibold uppercase">Supported formats:</div>
-                      <div className="bg-[#0F172A] p-2.5 rounded-lg border border-[#232D45] font-mono text-[10px] text-gray-300">
-                        SBI Preset:<br/>
-                        26 Jul 2026 UPI/Zomato/123 500.00 Dr 10500.00
-                      </div>
-                      <div className="bg-[#0F172A] p-2.5 rounded-lg border border-[#232D45] font-mono text-[10px] text-gray-300">
-                        APGB Preset:<br/>
-                        26-07-2026 OnlineTrf 1000.00 Cr
-                      </div>
-                    </div>
+                  {/* Mode Toggle */}
+                  <div className="flex bg-[#0F172A] p-1.5 rounded-xl border border-[#232D45] gap-1 max-w-md mx-auto w-full">
+                    <button 
+                      type="button"
+                      onClick={() => setImportMode('MANUAL')}
+                      className={`flex-1 text-center py-2 text-xs font-semibold rounded-lg transition-all ${
+                        importMode === 'MANUAL' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      Manual Entry Grid
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setImportMode('FILE')}
+                      className={`flex-1 text-center py-2 text-xs font-semibold rounded-lg transition-all ${
+                        importMode === 'FILE' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      Upload Excel / CSV File
+                    </button>
                   </div>
 
-                  <div className="md:col-span-2 flex flex-col gap-4">
-                    {/* Toggle Import Mode */}
-                    <div className="flex bg-[#0F172A] p-1.5 rounded-xl border border-[#232D45] gap-1">
-                      <button 
-                        type="button"
-                        onClick={() => setImportMode('TEXT')}
-                        className={`flex-1 text-center py-2 text-xs font-semibold rounded-lg transition-all ${
-                          importMode === 'TEXT' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
-                        }`}
-                      >
-                        Paste Statement Text
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={() => setImportMode('FILE')}
-                        className={`flex-1 text-center py-2 text-xs font-semibold rounded-lg transition-all ${
-                          importMode === 'FILE' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
-                        }`}
-                      >
-                        Upload Statement File
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-400 mb-1.5">Choose Bank Account</label>
-                        <select 
-                          value={statementAccount} 
-                          onChange={(e) => setStatementAccount(e.target.value)}
-                          className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                        >
-                          <option value="SBI">SBI Bank Statement</option>
-                          <option value="APGB">APGB Bank Statement</option>
-                          <option value="GENERIC">Generic Text / CSV Format</option>
-                        </select>
+                  {importMode === 'FILE' ? (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="md:col-span-1 bg-[#1E293B]/20 border border-[#232D45] rounded-xl p-5 flex flex-col gap-4 text-sm">
+                        <h4 className="font-semibold text-white flex items-center gap-1.5">
+                          <BookOpen className="h-4 w-4 text-blue-400" /> Instructions
+                        </h4>
+                        <p className="text-gray-300 text-xs leading-relaxed">
+                          Upload an Excel (.xlsx, .xls) or CSV (.csv) file. 
+                        </p>
+                        <p className="text-gray-300 text-xs leading-relaxed">
+                          Your file must include headers that match these names:
+                        </p>
+                        <div className="bg-[#0F172A] p-3 rounded-lg border border-[#232D45] font-mono text-[11px] text-gray-300 flex flex-col gap-1">
+                          <div><strong>date</strong> (YYYY-MM-DD or DD-MM-YYYY)</div>
+                          <div><strong>category</strong> (Food, Utilities, Salary, etc.)</div>
+                          <div><strong>credit</strong> (monetary amount for income)</div>
+                          <div><strong>debit</strong> (monetary amount for expense)</div>
+                          <div><strong>description</strong> (optional text)</div>
+                        </div>
                       </div>
 
-                      {importMode === 'FILE' && (
-                        <div>
-                          <label className="block text-xs font-semibold text-gray-400 mb-1.5">PDF Password (if encrypted)</label>
-                          <input 
-                            type="password" 
-                            placeholder="Password to open statement" 
-                            value={pdfPassword}
-                            onChange={(e) => setPdfPassword(e.target.value)}
-                            className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {importMode === 'TEXT' ? (
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-400 mb-1.5">Paste Statement Text</label>
-                        <textarea 
-                          rows="8"
-                          placeholder="Paste transaction logs from your statement here..."
-                          value={statementText}
-                          onChange={(e) => setStatementText(e.target.value)}
-                          className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl p-3.5 font-mono text-xs text-white focus:outline-none focus:border-blue-500 transition-all"
-                        ></textarea>
-                      </div>
-                    ) : (
-                      <div className="border border-dashed border-[#232D45] bg-[#0F172A]/50 rounded-xl p-8 flex flex-col items-center justify-center text-center gap-3">
-                        <Upload className="h-8 w-8 text-gray-500" />
-                        <div>
-                          <label className="cursor-pointer bg-[#1E293B] hover:bg-[#2D3748] text-white px-4 py-2 rounded-lg text-xs font-semibold transition-all inline-block">
-                            Select Statement File
-                            <input 
-                              type="file" 
-                              accept=".pdf,.txt,.csv" 
-                              className="hidden" 
-                              onChange={(e) => setStatementFile(e.target.files[0])}
-                            />
-                          </label>
-                          <p className="text-[10px] text-gray-500 mt-2">Supports PDF, TXT or CSV files</p>
-                        </div>
-                        {statementFile && (
-                          <div className="bg-blue-600/10 border border-blue-500/20 text-blue-400 text-xs px-3.5 py-1.5 rounded-lg font-medium mt-1">
-                            Selected: {statementFile.name} ({(statementFile.size / 1024).toFixed(1)} KB)
+                      <div className="md:col-span-2 flex flex-col gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-400 mb-1.5">Target Bank Account</label>
+                            <select 
+                              value={statementAccount} 
+                              onChange={(e) => setStatementAccount(e.target.value)}
+                              className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                            >
+                              <option value="SBI">SBI Bank Account</option>
+                              <option value="APGB">APGB Bank Account</option>
+                              <option value="CASH">Cash / Wallet</option>
+                            </select>
                           </div>
-                        )}
+                        </div>
+
+                        <div className="border border-dashed border-[#232D45] bg-[#0F172A]/50 rounded-xl p-8 flex flex-col items-center justify-center text-center gap-3">
+                          <Upload className="h-8 w-8 text-gray-500" />
+                          <div>
+                            <label className="cursor-pointer bg-[#1E293B] hover:bg-[#2D3748] text-white px-4 py-2 rounded-lg text-xs font-semibold transition-all inline-block">
+                              Select Excel or CSV File
+                              <input 
+                                type="file" 
+                                accept=".csv,.xlsx,.xls" 
+                                className="hidden" 
+                                onChange={(e) => setStatementFile(e.target.files[0])}
+                              />
+                            </label>
+                            <p className="text-[10px] text-gray-500 mt-2">Supports CSV, XLSX, and XLS formats</p>
+                          </div>
+                          {statementFile && (
+                            <div className="bg-blue-600/10 border border-blue-500/20 text-blue-400 text-xs px-3.5 py-1.5 rounded-lg font-medium mt-1">
+                              Selected: {statementFile.name} ({(statementFile.size / 1024).toFixed(1)} KB)
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex justify-end gap-3 pt-2">
+                          <button 
+                            onClick={() => {
+                              setShowParserModal(false);
+                              setStatementFile(null);
+                            }}
+                            className="bg-[#1E293B] hover:bg-[#2D3748] px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                          >
+                            Cancel
+                          </button>
+                          <button 
+                            onClick={handleParseStatement}
+                            className="bg-blue-600 hover:bg-blue-700 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all flex items-center gap-1.5 text-white"
+                            disabled={loading}
+                          >
+                            {loading && <RefreshCw className="h-4 w-4 animate-spin" />}
+                            Upload & Parse File
+                          </button>
+                        </div>
                       </div>
-                    )}
-
-                    <div className="flex justify-end gap-3 pt-2">
-                      <button 
-                        onClick={() => {
-                          setShowParserModal(false);
-                          setStatementFile(null);
-                          setPdfPassword('');
-                        }}
-                        className="bg-[#1E293B] hover:bg-[#2D3748] px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
-                      >
-                        Cancel
-                      </button>
-                      <button 
-                        onClick={handleParseStatement}
-                        className="bg-blue-600 hover:bg-blue-700 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all flex items-center gap-1.5 text-white"
-                        disabled={loading}
-                      >
-                        {loading && <RefreshCw className="h-4 w-4 animate-spin" />}
-                        Parse & Review
-                      </button>
                     </div>
+                  ) : (
+                    /* Manual Entry Grid Mode */
+                    <div className="flex flex-col gap-4">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-400 mb-1">Target Bank Account</label>
+                          <select 
+                            value={statementAccount} 
+                            onChange={(e) => setStatementAccount(e.target.value)}
+                            className="bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 transition-all"
+                          >
+                            <option value="SBI">SBI Bank Account</option>
+                            <option value="APGB">APGB Bank Account</option>
+                            <option value="CASH">Cash / Wallet</option>
+                          </select>
+                        </div>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => setManualRows([{ date: new Date().toISOString().split('T')[0], category: 'Other', description: '', credit: '', debit: '' }])}
+                            className="bg-[#1E293B] hover:bg-red-950/40 text-gray-400 hover:text-red-400 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all border border-[#232D45]"
+                          >
+                            Clear All
+                          </button>
+                          <button 
+                            onClick={handleAddManualRow}
+                            className="bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all border border-blue-500/20"
+                          >
+                            + Add Row
+                          </button>
+                        </div>
+                      </div>
 
-                  </div>
+                      <div className="overflow-x-auto rounded-xl border border-[#232D45] max-h-80">
+                        <table className="w-full text-left text-sm border-collapse">
+                          <thead>
+                            <tr className="bg-[#1E293B]/60 text-gray-400 font-semibold border-b border-[#232D45]">
+                              <th className="px-3 py-2 text-xs uppercase w-32">Date</th>
+                              <th className="px-3 py-2 text-xs uppercase w-36">Category</th>
+                              <th className="px-3 py-2 text-xs uppercase w-48">Description</th>
+                              <th className="px-3 py-2 text-xs uppercase w-28">Debit (Expense)</th>
+                              <th className="px-3 py-2 text-xs uppercase w-28">Credit (Income)</th>
+                              <th className="px-3 py-2 text-xs text-center uppercase w-14">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#232D45] bg-[#161D30]/10">
+                            {manualRows.map((row, idx) => (
+                              <tr key={idx} className="hover:bg-[#1E293B]/20 transition-all">
+                                <td className="px-2 py-1.5">
+                                  <input 
+                                    type="date" 
+                                    value={row.date} 
+                                    onChange={(e) => handleUpdateManualRow(idx, 'date', e.target.value)}
+                                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-lg px-2 py-1 text-xs text-white focus:border-blue-500 focus:outline-none"
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <select 
+                                    value={row.category} 
+                                    onChange={(e) => handleUpdateManualRow(idx, 'category', e.target.value)}
+                                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-lg px-2 py-1 text-xs text-white focus:border-blue-500 focus:outline-none"
+                                  >
+                                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                  </select>
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <input 
+                                    type="text" 
+                                    placeholder="Particulars..."
+                                    value={row.description} 
+                                    onChange={(e) => handleUpdateManualRow(idx, 'description', e.target.value)}
+                                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-lg px-2 py-1 text-xs text-white focus:border-blue-500 focus:outline-none"
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <input 
+                                    type="number" 
+                                    placeholder="Debit amount"
+                                    value={row.debit} 
+                                    disabled={!!row.credit}
+                                    onChange={(e) => handleUpdateManualRow(idx, 'debit', e.target.value)}
+                                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-lg px-2 py-1 text-xs text-white focus:border-blue-500 focus:outline-none disabled:opacity-30"
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <input 
+                                    type="number" 
+                                    placeholder="Credit amount"
+                                    value={row.credit} 
+                                    disabled={!!row.debit}
+                                    onChange={(e) => handleUpdateManualRow(idx, 'credit', e.target.value)}
+                                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-lg px-2 py-1 text-xs text-white focus:border-blue-500 focus:outline-none disabled:opacity-30"
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5 text-center">
+                                  <button 
+                                    onClick={() => handleDeleteManualRow(idx)}
+                                    className="text-gray-400 hover:text-red-500 p-1 rounded-lg transition-colors"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="flex justify-end gap-3 pt-2">
+                        <button 
+                          onClick={() => setShowParserModal(false)}
+                          className="bg-[#1E293B] hover:bg-[#2D3748] px-5 py-2.5 rounded-xl text-sm font-semibold transition-all"
+                        >
+                          Cancel
+                        </button>
+                        <button 
+                          onClick={handleParseStatement}
+                          className="bg-blue-600 hover:bg-blue-700 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all text-white"
+                        >
+                          Process & Review
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
-
               ) : (
                 <div className="flex flex-col gap-4">
                   <div className="bg-blue-600/10 border border-blue-500/20 text-blue-400 p-3.5 rounded-xl text-xs flex items-center justify-between">
