@@ -5,8 +5,8 @@ from decimal import Decimal
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import render
-from django.utils.dateparse import parse_date
-from .models import Transaction
+from django.utils.dateparse import parse_date, parse_datetime
+from .models import Transaction, Category
 from .parser import parse_statement_text, auto_categorize, extract_text_from_pdf, parse_excel_or_csv
 
 
@@ -32,6 +32,34 @@ def verify_token(request):
         if token in ACTIVE_SESSIONS:
             return True
     return False
+
+def _parse_date_or_datetime(value):
+    """Parse a date string, accepting both date-only and datetime formats."""
+    if not value:
+        return None
+    # Try datetime first (e.g. 2026-07-31T14:30)
+    dt = parse_datetime(value)
+    if dt:
+        return dt
+    # Fallback to date-only (e.g. 2026-07-31)
+    d = parse_date(value)
+    if d:
+        from django.utils import timezone
+        import datetime
+        return timezone.make_aware(datetime.datetime.combine(d, datetime.time()))
+    return None
+
+def _serialize_transaction(t):
+    """Serialize a Transaction instance to a dict."""
+    return {
+        'id': t.id,
+        'date': t.date.strftime('%Y-%m-%dT%H:%M'),
+        'description': t.description,
+        'amount': float(t.amount),
+        'type': t.type,
+        'account': t.account,
+        'category': t.category
+    }
 
 @csrf_exempt
 def auth_login(request):
@@ -69,57 +97,121 @@ def transaction_list_create(request):
         if category_filter:
             transactions = transactions.filter(category=category_filter)
             
-        data = []
-        for t in transactions:
-            data.append({
-                'id': t.id,
-                'date': t.date.strftime('%Y-%m-%d'),
-                'description': t.description,
-                'amount': float(t.amount),
-                'type': t.type,
-                'account': t.account,
-                'category': t.category
-            })
+        data = [_serialize_transaction(t) for t in transactions]
         return JsonResponse(data, safe=False)
         
     elif request.method == 'POST':
         try:
             body = json.loads(request.body)
+            dt = _parse_date_or_datetime(body.get('date'))
+            if not dt:
+                from django.utils import timezone
+                dt = timezone.now()
             t = Transaction.objects.create(
-                date=parse_date(body.get('date')),
+                date=dt,
                 description=body.get('description', 'Manual Transaction'),
                 amount=Decimal(str(body.get('amount', 0))),
                 type=body.get('type', 'EXPENSE'),
                 account=body.get('account', 'CASH'),
                 category=body.get('category', 'Other')
             )
-            return JsonResponse({
-                'id': t.id,
-                'date': t.date.strftime('%Y-%m-%d'),
-                'description': t.description,
-                'amount': float(t.amount),
-                'type': t.type,
-                'account': t.account,
-                'category': t.category
-            }, status=201)
+            return JsonResponse(_serialize_transaction(t), status=201)
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)
 
 @csrf_exempt
-def transaction_detail_delete(request, pk):
+def transaction_detail(request, pk):
+    """Handle GET, PUT, and DELETE for a single transaction."""
     if not verify_token(request):
         return JsonResponse({'error': 'Unauthorized'}, status=401)
+    
+    try:
+        t = Transaction.objects.get(pk=pk)
+    except Transaction.DoesNotExist:
+        return JsonResponse({'error': 'Transaction not found'}, status=404)
         
     if request.method == 'DELETE':
+        t.delete()
+        return JsonResponse({'success': True}, status=200)
+    
+    elif request.method == 'PUT':
         try:
-            t = Transaction.objects.get(pk=pk)
-            t.delete()
-            return JsonResponse({'success': True}, status=200)
-        except Transaction.DoesNotExist:
-            return JsonResponse({'error': 'Transaction not found'}, status=404)
+            body = json.loads(request.body)
+            if 'date' in body:
+                dt = _parse_date_or_datetime(body['date'])
+                if dt:
+                    t.date = dt
+            if 'description' in body:
+                t.description = body['description']
+            if 'amount' in body:
+                t.amount = Decimal(str(body['amount']))
+            if 'type' in body:
+                t.type = body['type']
+            if 'account' in body:
+                t.account = body['account']
+            if 'category' in body:
+                t.category = body['category']
+            t.save()
+            return JsonResponse(_serialize_transaction(t), status=200)
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)
+    
+    elif request.method == 'GET':
+        return JsonResponse(_serialize_transaction(t))
+    
     return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def category_list_create(request):
+    """List all categories or create a new one."""
+    if not verify_token(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    if request.method == 'GET':
+        categories = Category.objects.all()
+        data = [{'id': c.id, 'name': c.name, 'emoji': c.emoji, 'is_default': c.is_default} for c in categories]
+        return JsonResponse(data, safe=False)
+    
+    elif request.method == 'POST':
+        try:
+            body = json.loads(request.body)
+            name = body.get('name', '').strip()
+            emoji = body.get('emoji', '📦').strip()
+            if not name:
+                return JsonResponse({'error': 'Category name is required'}, status=400)
+            
+            cat, created = Category.objects.get_or_create(
+                name=name,
+                defaults={'emoji': emoji, 'is_default': False}
+            )
+            if not created:
+                return JsonResponse({'error': 'Category already exists'}, status=400)
+            
+            return JsonResponse({'id': cat.id, 'name': cat.name, 'emoji': cat.emoji, 'is_default': cat.is_default}, status=201)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=400)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def category_delete(request, pk):
+    """Delete a category (only non-default ones)."""
+    if not verify_token(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    if request.method == 'DELETE':
+        try:
+            cat = Category.objects.get(pk=pk)
+            if cat.is_default:
+                return JsonResponse({'error': 'Cannot delete default categories'}, status=400)
+            cat.delete()
+            return JsonResponse({'success': True}, status=200)
+        except Category.DoesNotExist:
+            return JsonResponse({'error': 'Category not found'}, status=404)
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
+
 
 @csrf_exempt
 def parse_statement(request):
@@ -162,24 +254,21 @@ def bulk_import(request):
                 category = item.get('category', 'Other')
                 if category == 'Other':
                     category = auto_categorize(item.get('description', ''), item.get('type', 'EXPENSE'))
+                
+                dt = _parse_date_or_datetime(item.get('date'))
+                if not dt:
+                    from django.utils import timezone
+                    dt = timezone.now()
                     
                 t = Transaction.objects.create(
-                    date=parse_date(item.get('date')),
+                    date=dt,
                     description=item.get('description', 'Imported transaction'),
                     amount=Decimal(str(item.get('amount', 0))),
                     type=item.get('type', 'EXPENSE'),
                     account=account,
                     category=category
                 )
-                created_transactions.append({
-                    'id': t.id,
-                    'date': t.date.strftime('%Y-%m-%d'),
-                    'description': t.description,
-                    'amount': float(t.amount),
-                    'type': t.type,
-                    'account': t.account,
-                    'category': t.category
-                })
+                created_transactions.append(_serialize_transaction(t))
             return JsonResponse({'success': True, 'count': len(created_transactions), 'transactions': created_transactions}, status=201)
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)

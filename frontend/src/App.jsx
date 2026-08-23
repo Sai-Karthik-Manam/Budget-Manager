@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -18,7 +18,11 @@ import {
   Lock,
   User,
   ShieldCheck,
-  LogOut
+  LogOut,
+  Pencil,
+  Settings,
+  Bell,
+  BellOff
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -37,7 +41,7 @@ import {
 const API_BASE = '/api';
 
 
-const CATEGORIES = [
+const DEFAULT_CATEGORIES = [
   'Food', 'Shopping', 'Utilities', 'Rent', 'Travel', 'Salary', 
   'Investment', 'Self Transfer', 'Entertainment', 'Interest', 'Refund/Cashback', 'Other'
 ];
@@ -69,8 +73,10 @@ export default function App() {
   const [error, setError] = useState('');
   
   // Manual transaction state
+  const now = new Date();
+  const nowLocal = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}T${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
   const [manualForm, setManualForm] = useState({
-    date: new Date().toISOString().split('T')[0],
+    date: nowLocal,
     description: '',
     amount: '',
     type: 'EXPENSE',
@@ -80,7 +86,7 @@ export default function App() {
 
   // Statement Parser state
   const [statementAccount, setStatementAccount] = useState('SBI');
-  const [importMode, setImportMode] = useState('MANUAL'); // 'MANUAL' or 'FILE'
+  const [importMode, setImportMode] = useState('MANUAL');
   const [statementFile, setStatementFile] = useState(null);
   const [parsedTransactions, setParsedTransactions] = useState([]);
   const [showParserModal, setShowParserModal] = useState(false);
@@ -88,7 +94,23 @@ export default function App() {
     { date: new Date().toISOString().split('T')[0], category: 'Other', description: '', credit: '', debit: '' }
   ]);
 
+  // Categories state (fetched from API)
+  const [categories, setCategories] = useState([]);
+  const CATEGORIES = categories.length > 0 ? categories.map(c => c.name) : DEFAULT_CATEGORIES;
 
+  // Category settings modal
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [newCatName, setNewCatName] = useState('');
+  const [newCatEmoji, setNewCatEmoji] = useState('📦');
+
+  // Edit transaction modal
+  const [editingTransaction, setEditingTransaction] = useState(null);
+  const [editForm, setEditForm] = useState({});
+
+  // Daily reminder
+  const [reminderEnabled, setReminderEnabled] = useState(() => {
+    return sessionStorage.getItem('wealth_sense_reminder') === 'true';
+  });
 
   // Filters state
   const [accountFilter, setAccountFilter] = useState('ALL');
@@ -96,7 +118,7 @@ export default function App() {
   const [typeFilter, setTypeFilter] = useState('ALL');
 
   useEffect(() => {
-    const token = localStorage.getItem('wealth_sense_token');
+    const token = sessionStorage.getItem('wealth_sense_token');
     if (token) {
       setIsAuthenticated(true);
       fetchData(token);
@@ -132,8 +154,37 @@ export default function App() {
     };
   }, []);
 
+  // Auto-logout after 10 minutes of inactivity
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const IDLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes
+    let idleTimer;
+
+    const resetIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        sessionStorage.removeItem('wealth_sense_token');
+        setIsAuthenticated(false);
+        setLoginStep(1);
+        setLoginCreds({ username: '', password: '' });
+        setVerificationPin('');
+        alert('You have been logged out due to inactivity.');
+      }, IDLE_TIMEOUT);
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach(evt => window.addEventListener(evt, resetIdleTimer));
+    resetIdleTimer(); // start the timer
+
+    return () => {
+      clearTimeout(idleTimer);
+      events.forEach(evt => window.removeEventListener(evt, resetIdleTimer));
+    };
+  }, [isAuthenticated]);
+
   const fetchData = async (overrideToken = null) => {
-    const token = overrideToken || localStorage.getItem('wealth_sense_token');
+    const token = overrideToken || sessionStorage.getItem('wealth_sense_token');
     if (!token) return;
     setLoading(true);
     try {
@@ -150,6 +201,15 @@ export default function App() {
       if (!insRes.ok) throw new Error('Failed to fetch insights');
       const insData = await insRes.json();
       setInsights(insData);
+
+      // Fetch categories
+      const catRes = await fetch(`${API_BASE}/categories/`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (catRes.ok) {
+        const catData = await catRes.json();
+        setCategories(catData);
+      }
       
       setError('');
     } catch (err) {
@@ -186,7 +246,7 @@ export default function App() {
         throw new Error(data.error || 'Invalid credentials or verification PIN');
       }
       
-      localStorage.setItem('wealth_sense_token', data.token);
+      sessionStorage.setItem('wealth_sense_token', data.token);
       setIsAuthenticated(true);
       fetchData(data.token);
     } catch (err) {
@@ -197,7 +257,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('wealth_sense_token');
+    sessionStorage.removeItem('wealth_sense_token');
     setIsAuthenticated(false);
     setLoginStep(1);
     setLoginCreds({ username: '', password: '' });
@@ -211,7 +271,7 @@ export default function App() {
       alert('Please fill description and amount.');
       return;
     }
-    const token = localStorage.getItem('wealth_sense_token');
+    const token = sessionStorage.getItem('wealth_sense_token');
     try {
       const res = await fetch(`${API_BASE}/transactions/`, {
         method: 'POST',
@@ -223,8 +283,10 @@ export default function App() {
       });
       if (!res.ok) throw new Error('Failed to add transaction');
       
+      const n = new Date();
+      const nLocal = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}T${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`;
       setManualForm({
-        date: new Date().toISOString().split('T')[0],
+        date: nLocal,
         description: '',
         amount: '',
         type: 'EXPENSE',
@@ -241,7 +303,7 @@ export default function App() {
   // Delete Transaction
   const handleDeleteTransaction = async (id) => {
     if (!confirm('Are you sure you want to delete this transaction?')) return;
-    const token = localStorage.getItem('wealth_sense_token');
+    const token = sessionStorage.getItem('wealth_sense_token');
     try {
       const res = await fetch(`${API_BASE}/transactions/${id}/`, {
         method: 'DELETE',
@@ -253,6 +315,114 @@ export default function App() {
       alert(err.message);
     }
   };
+
+  // Edit Transaction
+  const handleStartEdit = (tx) => {
+    setEditingTransaction(tx);
+    setEditForm({ ...tx });
+  };
+
+  const handleSaveEdit = async () => {
+    const token = sessionStorage.getItem('wealth_sense_token');
+    try {
+      const res = await fetch(`${API_BASE}/transactions/${editForm.id}/`, {
+        method: 'PUT',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(editForm)
+      });
+      if (!res.ok) throw new Error('Failed to update transaction');
+      setEditingTransaction(null);
+      setEditForm({});
+      fetchData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  // Category CRUD
+  const handleAddCategory = async () => {
+    if (!newCatName.trim()) { alert('Enter a category name'); return; }
+    const token = sessionStorage.getItem('wealth_sense_token');
+    try {
+      const res = await fetch(`${API_BASE}/categories/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ name: newCatName.trim(), emoji: newCatEmoji || '📦' })
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+      setNewCatName('');
+      setNewCatEmoji('📦');
+      fetchData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleDeleteCategory = async (id) => {
+    if (!confirm('Delete this category?')) return;
+    const token = sessionStorage.getItem('wealth_sense_token');
+    try {
+      const res = await fetch(`${API_BASE}/categories/${id}/`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Cannot delete'); }
+      fetchData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  // Daily Reminder
+  useEffect(() => {
+    if (!isAuthenticated || !reminderEnabled) return;
+
+    const checkReminder = () => {
+      const lastReminded = sessionStorage.getItem('wealth_sense_last_reminder');
+      const today = new Date().toISOString().split('T')[0];
+      const hour = new Date().getHours();
+      
+      if (lastReminded !== today && hour >= 20) {
+        sessionStorage.setItem('wealth_sense_last_reminder', today);
+        if (Notification.permission === 'granted') {
+          new Notification('WealthSense Reminder 💰', {
+            body: 'Have you logged all your transactions for today?',
+            icon: '💰'
+          });
+        } else {
+          alert('💰 Daily Reminder: Have you logged all your transactions for today?');
+        }
+      }
+    };
+
+    // Request notification permission
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    checkReminder();
+    const interval = setInterval(checkReminder, 60 * 60 * 1000); // check every hour
+    return () => clearInterval(interval);
+  }, [isAuthenticated, reminderEnabled]);
+
+  const toggleReminder = () => {
+    const newVal = !reminderEnabled;
+    setReminderEnabled(newVal);
+    sessionStorage.setItem('wealth_sense_reminder', newVal.toString());
+    if (newVal && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  };
+
+  // Helper to get emoji for a category name
+  const getCategoryEmoji = (name) => {
+    const cat = categories.find(c => c.name === name);
+    return cat ? cat.emoji : '';
+  };
+
 
   const handleAddManualRow = () => {
     setManualRows([...manualRows, {
@@ -289,7 +459,7 @@ export default function App() {
         return;
       }
 
-      const token = localStorage.getItem('wealth_sense_token');
+      const token = sessionStorage.getItem('wealth_sense_token');
       setLoading(true);
       try {
         const formData = new FormData();
@@ -349,7 +519,7 @@ export default function App() {
   // Confirm Import parsed transactions
   const handleImportParsed = async () => {
     if (parsedTransactions.length === 0) return;
-    const token = localStorage.getItem('wealth_sense_token');
+    const token = sessionStorage.getItem('wealth_sense_token');
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/bulk-import/`, {
@@ -551,7 +721,23 @@ export default function App() {
             className="flex items-center gap-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm font-medium shadow-md shadow-indigo-500/10 transition-all"
           >
             <Upload className="h-4 w-4" />
-            Import Statements
+            <span className="hidden sm:inline">Import</span>
+          </button>
+
+          <button 
+            onClick={() => setShowCategoryModal(true)} 
+            className="p-2 bg-[#1E293B] hover:bg-[#2D3748] border border-[#232D45] rounded-xl text-gray-400 hover:text-white transition-all"
+            title="Category Settings"
+          >
+            <Settings className="h-4 w-4 sm:h-5 sm:w-5" />
+          </button>
+
+          <button 
+            onClick={toggleReminder} 
+            className={`p-2 border rounded-xl transition-all ${reminderEnabled ? 'bg-amber-500/10 border-amber-500/20 text-amber-400 hover:bg-amber-500/20' : 'bg-[#1E293B] border-[#232D45] text-gray-400 hover:text-white hover:bg-[#2D3748]'}`}
+            title={reminderEnabled ? 'Reminder ON – click to disable' : 'Enable daily reminder'}
+          >
+            {reminderEnabled ? <Bell className="h-4 w-4 sm:h-5 sm:w-5" /> : <BellOff className="h-4 w-4 sm:h-5 sm:w-5" />}
           </button>
 
           <button 
@@ -573,12 +759,12 @@ export default function App() {
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto px-6 mt-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 mt-8 grid grid-cols-1 lg:grid-cols-3 gap-8 pb-4">
         
-        {/* Left column: Overview, Accounts, Advisor */}
-        <div className="lg:col-span-1 flex flex-col gap-8">
-          
-          {/* Net Balance & Stats Summary */}
+        {/* ===== LEFT SIDEBAR PANELS (on desktop) / BOTTOM PANELS (on mobile) ===== */}
+
+        {/* Net Balance & Stats Summary — mobile order-4, desktop stays in left col */}
+        <div className="order-4 lg:order-none lg:col-span-1 lg:row-span-1">
           <div className="glass-panel p-6 rounded-2xl flex flex-col gap-5">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">Total Capital</h2>
             <div>
@@ -608,8 +794,10 @@ export default function App() {
               <span className="font-semibold text-blue-400">{insights.savings_rate}%</span>
             </div>
           </div>
+        </div>
 
-          {/* Account Breakdown */}
+        {/* Account Breakdown — mobile order-5, desktop stays in left col */}
+        <div className="order-5 lg:order-none lg:col-span-1 lg:row-span-1">
           <div className="glass-panel p-6 rounded-2xl flex flex-col gap-4">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Wallet className="h-5 w-5 text-indigo-400" /> Bank & Wallet Accounts
@@ -650,8 +838,10 @@ export default function App() {
               </div>
             </div>
           </div>
+        </div>
 
-          {/* Financial Advisor Advice */}
+        {/* Financial Advisor Advice — mobile order-6, desktop stays in left col */}
+        <div className="order-6 lg:order-none lg:col-span-1 lg:row-span-1">
           <div className="glass-panel p-6 rounded-2xl flex flex-col gap-4">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-yellow-400" /> Wealth Advisor AI
@@ -684,13 +874,12 @@ export default function App() {
               })}
             </div>
           </div>
-
         </div>
 
-        {/* Right column (lg:col-span-2) - Charts, manual add, Ledger */}
-        <div className="lg:col-span-2 flex flex-col gap-8">
-          
-          {/* Quick Manual Add Form */}
+        {/* ===== RIGHT COLUMN PANELS (on desktop) / TOP PANELS (on mobile) ===== */}
+
+        {/* Quick Manual Add Form — mobile order-1 (FIRST!), desktop right col */}
+        <div className="order-1 lg:order-none lg:col-span-2 lg:row-start-1">
           <div className="glass-panel p-6 rounded-2xl flex flex-col gap-5">
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Plus className="h-5 w-5 text-emerald-400" /> Add Transaction manually
@@ -698,9 +887,9 @@ export default function App() {
             
             <form onSubmit={handleAddManual} className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Date</label>
+                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Date & Time</label>
                 <input 
-                  type="date" 
+                  type="datetime-local" 
                   value={manualForm.date} 
                   onChange={(e) => setManualForm({...manualForm, date: e.target.value})}
                   className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
@@ -779,8 +968,131 @@ export default function App() {
               </div>
             </form>
           </div>
+        </div>
 
-          {/* Interactive Visualizations */}
+        {/* Transaction Ledger — mobile order-2, desktop right col */}
+        <div className="order-2 lg:order-none lg:col-span-2">
+          <div className="glass-panel p-6 rounded-2xl flex flex-col gap-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <ArrowRightLeft className="h-5 w-5 text-blue-400" /> Transaction Ledger
+              </h3>
+              
+              {/* Ledger Filters */}
+              <div className="flex flex-wrap gap-2.5">
+                <select 
+                  value={accountFilter} 
+                  onChange={(e) => setAccountFilter(e.target.value)}
+                  className="bg-[#0F172A] border border-[#232D45] rounded-lg px-2.5 py-1 text-xs text-gray-300"
+                >
+                  <option value="ALL">All Accounts</option>
+                  <option value="SBI">SBI Bank</option>
+                  <option value="APGB">APGB Bank</option>
+                  <option value="CASH">Cash</option>
+                </select>
+
+                <select 
+                  value={categoryFilter} 
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  className="bg-[#0F172A] border border-[#232D45] rounded-lg px-2.5 py-1 text-xs text-gray-300"
+                >
+                  <option value="ALL">All Categories</option>
+                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+
+                <select 
+                  value={typeFilter} 
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  className="bg-[#0F172A] border border-[#232D45] rounded-lg px-2.5 py-1 text-xs text-gray-300"
+                >
+                  <option value="ALL">All Types</option>
+                  <option value="INCOME">Income only</option>
+                  <option value="EXPENSE">Expense only</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Table */}
+            <div className="overflow-x-auto rounded-xl border border-[#232D45] bg-[#161D30]/20">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="bg-[#1E293B]/40 text-gray-400 font-semibold border-b border-[#232D45]">
+                    <th className="px-4 py-3 text-xs uppercase">Date & Time</th>
+                    <th className="px-4 py-3 text-xs uppercase">Account</th>
+                    <th className="px-4 py-3 text-xs uppercase">Description</th>
+                    <th className="px-4 py-3 text-xs uppercase">Category</th>
+                    <th className="px-4 py-3 text-xs uppercase text-right">Amount</th>
+                    <th className="px-4 py-3 text-xs uppercase text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#232D45]">
+                  {filteredTransactions.length === 0 ? (
+                    <tr>
+                      <td colSpan="6" className="px-4 py-8 text-center text-gray-500">
+                        No transactions match the criteria.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredTransactions.map(tx => {
+                      const dtParts = tx.date ? tx.date.split('T') : [tx.date, ''];
+                      const dateStr = dtParts[0] || '';
+                      const timeStr = dtParts[1] || '';
+                      return (
+                      <tr key={tx.id} className="hover:bg-[#1E293B]/10 transition-colors">
+                        <td className="px-4 py-3.5 text-gray-300 whitespace-nowrap">
+                          <div className="flex flex-col">
+                            <span className="text-sm">{dateStr}</span>
+                            {timeStr && <span className="text-[10px] text-gray-500">{timeStr}</span>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                            tx.account === 'SBI' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 
+                            tx.account === 'APGB' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' : 
+                            'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                          }`}>
+                            {tx.account}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-white font-medium max-w-xs truncate">{tx.description}</td>
+                        <td className="px-4 py-3.5 whitespace-nowrap text-gray-300">
+                          <span>{getCategoryEmoji(tx.category)} {tx.category}</span>
+                        </td>
+                        <td className={`px-4 py-3.5 font-semibold text-right whitespace-nowrap ${
+                          tx.type === 'INCOME' ? 'text-emerald-500' : 'text-rose-500'
+                        }`}>
+                          {tx.type === 'INCOME' ? '+' : '-'}₹{tx.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="px-4 py-3.5 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center gap-1">
+                            <button 
+                              onClick={() => handleStartEdit(tx)}
+                              className="text-gray-400 hover:text-blue-400 p-1.5 rounded-lg hover:bg-blue-500/10 transition-all"
+                              title="Edit Transaction"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteTransaction(tx.id)}
+                              className="text-gray-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-500/10 transition-all"
+                              title="Delete Transaction"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Interactive Visualizations — mobile order-3, desktop right col */}
+        <div className="order-3 lg:order-none lg:col-span-2">
           <div className="glass-panel p-6 rounded-2xl flex flex-col gap-6">
             <div className="flex justify-between items-center">
               <h3 className="text-base font-bold text-white">Financial Analytics</h3>
@@ -852,106 +1164,182 @@ export default function App() {
               </div>
             </div>
           </div>
+        </div>
 
-          {/* Interactive Ledger */}
-          <div className="glass-panel p-6 rounded-2xl flex flex-col gap-4">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <ArrowRightLeft className="h-5 w-5 text-blue-400" /> Transaction Ledger
+      </main>
+
+      {/* ===== Edit Transaction Modal ===== */}
+      {editingTransaction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-[#111827] border border-[#232D45] w-full max-w-lg rounded-2xl shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between border-b border-[#232D45] px-6 py-4">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Pencil className="h-5 w-5 text-blue-400" /> Edit Transaction
               </h3>
-              
-              {/* Ledger Filters */}
-              <div className="flex flex-wrap gap-2.5">
-                <select 
-                  value={accountFilter} 
-                  onChange={(e) => setAccountFilter(e.target.value)}
-                  className="bg-[#0F172A] border border-[#232D45] rounded-lg px-2.5 py-1 text-xs text-gray-300"
-                >
-                  <option value="ALL">All Accounts</option>
-                  <option value="SBI">SBI Bank</option>
-                  <option value="APGB">APGB Bank</option>
-                  <option value="CASH">Cash</option>
-                </select>
-
-                <select 
-                  value={categoryFilter} 
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                  className="bg-[#0F172A] border border-[#232D45] rounded-lg px-2.5 py-1 text-xs text-gray-300"
-                >
-                  <option value="ALL">All Categories</option>
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-
-                <select 
-                  value={typeFilter} 
-                  onChange={(e) => setTypeFilter(e.target.value)}
-                  className="bg-[#0F172A] border border-[#232D45] rounded-lg px-2.5 py-1 text-xs text-gray-300"
-                >
-                  <option value="ALL">All Types</option>
-                  <option value="INCOME">Income only</option>
-                  <option value="EXPENSE">Expense only</option>
-                </select>
-              </div>
+              <button onClick={() => setEditingTransaction(null)} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-[#1E293B] transition-all">
+                <X className="h-5 w-5" />
+              </button>
             </div>
 
-            {/* Table */}
-            <div className="overflow-x-auto rounded-xl border border-[#232D45] bg-[#161D30]/20">
-              <table className="w-full border-collapse text-left text-sm">
-                <thead>
-                  <tr className="bg-[#1E293B]/40 text-gray-400 font-semibold border-b border-[#232D45]">
-                    <th className="px-4 py-3 text-xs uppercase">Date</th>
-                    <th className="px-4 py-3 text-xs uppercase">Account</th>
-                    <th className="px-4 py-3 text-xs uppercase">Description</th>
-                    <th className="px-4 py-3 text-xs uppercase">Category</th>
-                    <th className="px-4 py-3 text-xs uppercase text-right">Amount</th>
-                    <th className="px-4 py-3 text-xs uppercase text-center">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#232D45]">
-                  {filteredTransactions.length === 0 ? (
-                    <tr>
-                      <td colSpan="6" className="px-4 py-8 text-center text-gray-500">
-                        No transactions match the criteria.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredTransactions.map(tx => (
-                      <tr key={tx.id} className="hover:bg-[#1E293B]/10 transition-colors">
-                        <td className="px-4 py-3.5 text-gray-300 whitespace-nowrap">{tx.date}</td>
-                        <td className="px-4 py-3.5 whitespace-nowrap">
-                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                            tx.account === 'SBI' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 
-                            tx.account === 'APGB' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' : 
-                            'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                          }`}>
-                            {tx.account}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5 text-white font-medium max-w-xs truncate">{tx.description}</td>
-                        <td className="px-4 py-3.5 whitespace-nowrap text-gray-300">{tx.category}</td>
-                        <td className={`px-4 py-3.5 font-semibold text-right whitespace-nowrap ${
-                          tx.type === 'INCOME' ? 'text-emerald-500' : 'text-rose-500'
-                        }`}>
-                          {tx.type === 'INCOME' ? '+' : '-'}₹{tx.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td className="px-4 py-3.5 text-center whitespace-nowrap">
-                          <button 
-                            onClick={() => handleDeleteTransaction(tx.id)}
-                            className="text-gray-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-500/10 transition-all"
-                            title="Delete Transaction"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="p-6 flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Date & Time</label>
+                  <input 
+                    type="datetime-local" 
+                    value={editForm.date || ''} 
+                    onChange={(e) => setEditForm({...editForm, date: e.target.value})}
+                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Amount (₹)</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={editForm.amount || ''} 
+                    onChange={(e) => setEditForm({...editForm, amount: e.target.value})}
+                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Description</label>
+                <input 
+                  type="text" 
+                  value={editForm.description || ''} 
+                  onChange={(e) => setEditForm({...editForm, description: e.target.value})}
+                  className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Type</label>
+                  <select 
+                    value={editForm.type || 'EXPENSE'} 
+                    onChange={(e) => setEditForm({...editForm, type: e.target.value})}
+                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                  >
+                    <option value="EXPENSE">Expense</option>
+                    <option value="INCOME">Income</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Account</label>
+                  <select 
+                    value={editForm.account || 'SBI'} 
+                    onChange={(e) => setEditForm({...editForm, account: e.target.value})}
+                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                  >
+                    <option value="SBI">SBI Bank</option>
+                    <option value="APGB">APGB Bank</option>
+                    <option value="CASH">Cash</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Category</label>
+                  <select 
+                    value={editForm.category || 'Other'} 
+                    onChange={(e) => setEditForm({...editForm, category: e.target.value})}
+                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                  >
+                    {CATEGORIES.map(cat => <option key={cat} value={cat}>{getCategoryEmoji(cat)} {cat}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button 
+                  onClick={() => setEditingTransaction(null)} 
+                  className="px-4 py-2 bg-[#1E293B] hover:bg-[#2D3748] border border-[#232D45] rounded-xl text-sm text-gray-300 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleSaveEdit} 
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 rounded-xl text-sm font-semibold text-white shadow-md shadow-blue-500/10 transition-all"
+                >
+                  Save Changes
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </main>
+      )}
+
+      {/* ===== Category Settings Modal ===== */}
+      {showCategoryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-[#111827] border border-[#232D45] w-full max-w-md rounded-2xl shadow-2xl flex flex-col max-h-[80vh]">
+            <div className="flex items-center justify-between border-b border-[#232D45] px-6 py-4">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Settings className="h-5 w-5 text-indigo-400" /> Category Settings
+              </h3>
+              <button onClick={() => setShowCategoryModal(false)} className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-[#1E293B] transition-all">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-6 flex flex-col gap-4 overflow-y-auto">
+              {/* Add New Category */}
+              <div className="flex gap-2">
+                <input 
+                  type="text" 
+                  placeholder="Emoji" 
+                  value={newCatEmoji} 
+                  onChange={(e) => setNewCatEmoji(e.target.value)}
+                  className="w-16 bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-center text-lg focus:outline-none focus:border-blue-500 transition-all"
+                  maxLength={2}
+                />
+                <input 
+                  type="text" 
+                  placeholder="Category name..." 
+                  value={newCatName} 
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  className="flex-1 bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                />
+                <button 
+                  onClick={handleAddCategory}
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 rounded-xl text-sm font-semibold text-white transition-all flex items-center gap-1"
+                >
+                  <Plus className="h-4 w-4" /> Add
+                </button>
+              </div>
+
+              {/* Category List */}
+              <div className="flex flex-col gap-2">
+                <span className="text-xs text-gray-400 font-semibold uppercase tracking-wider">All Categories</span>
+                {categories.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-4 text-center">Loading categories...</p>
+                ) : (
+                  categories.map(cat => (
+                    <div key={cat.id} className="flex items-center justify-between bg-[#1E293B]/30 hover:bg-[#1E293B]/50 border border-[#232D45] rounded-xl px-4 py-3 transition-all">
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg">{cat.emoji}</span>
+                        <span className="text-sm font-medium text-white">{cat.name}</span>
+                        {cat.is_default && (
+                          <span className="text-[10px] font-bold text-gray-500 bg-gray-500/10 border border-gray-500/20 px-1.5 py-0.5 rounded-full">DEFAULT</span>
+                        )}
+                      </div>
+                      {!cat.is_default && (
+                        <button 
+                          onClick={() => handleDeleteCategory(cat.id)}
+                          className="text-gray-400 hover:text-red-500 p-1.5 rounded-lg hover:bg-red-500/10 transition-all"
+                          title="Delete Category"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Statement Importer Modal */}
       {showParserModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
