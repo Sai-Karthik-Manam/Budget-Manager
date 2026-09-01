@@ -42,9 +42,13 @@ const API_BASE = '/api';
 
 
 const DEFAULT_CATEGORIES = [
-  'Food', 'Shopping', 'Utilities', 'Rent', 'Travel', 'Rapido', 'Salary', 
-  'Investment', 'Self Transfer', 'Entertainment', 'Interest', 'Refund/Cashback',
-  'Remaining Balance', 'Previous Balance', 'Default Amount', 'Other'
+  'Bills', 'Bus', 'Card Fee', 'Drinks', 'Education', 'EMI',
+  'Entertainment', 'FastFood', 'Fuel', 'Fruits & Vegetables',
+  'Gift', 'Groceries', 'Health', 'Hobby', 'Internet/Mobile',
+  'Investment', 'Metro', 'Parking', 'Personal Grooming', 'Previous Balance',
+  'Rapido', 'Rent', 'Restaurant', 'Salary', 'Self Transfer',
+  'Stationary', 'Social', 'Train', 'Travel', 'Interest',
+  'Refund/Cashback', 'Other'
 ];
 
 const COLORS = [
