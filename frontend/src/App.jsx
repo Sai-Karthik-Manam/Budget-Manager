@@ -42,8 +42,9 @@ const API_BASE = '/api';
 
 
 const DEFAULT_CATEGORIES = [
-  'Food', 'Shopping', 'Utilities', 'Rent', 'Travel', 'Salary', 
-  'Investment', 'Self Transfer', 'Entertainment', 'Interest', 'Refund/Cashback', 'Other'
+  'Food', 'Shopping', 'Utilities', 'Rent', 'Travel', 'Rapido', 'Salary', 
+  'Investment', 'Self Transfer', 'Entertainment', 'Interest', 'Refund/Cashback',
+  'Remaining Balance', 'Previous Balance', 'Default Amount', 'Other'
 ];
 
 const COLORS = [
@@ -81,6 +82,7 @@ export default function App() {
     amount: '',
     type: 'EXPENSE',
     account: 'SBI',
+    to_account: 'CASH',
     category: 'Other'
   });
 
@@ -271,6 +273,10 @@ export default function App() {
       alert('Please fill description and amount.');
       return;
     }
+    if (manualForm.type === 'TRANSFER' && (!manualForm.to_account || manualForm.account === manualForm.to_account)) {
+      alert('Please select a different destination account for transfer.');
+      return;
+    }
     const token = sessionStorage.getItem('wealth_sense_token');
     try {
       const res = await fetch(`${API_BASE}/transactions/`, {
@@ -281,7 +287,16 @@ export default function App() {
         },
         body: JSON.stringify(manualForm)
       });
-      if (!res.ok) throw new Error('Failed to add transaction');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          sessionStorage.removeItem('wealth_sense_token');
+          setIsAuthenticated(false);
+          alert('Session expired. Please log in again.');
+          return;
+        }
+        throw new Error(errData.error || 'Failed to add transaction');
+      }
       
       const n = new Date();
       const nLocal = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}T${String(n.getHours()).padStart(2,'0')}:${String(n.getMinutes()).padStart(2,'0')}`;
@@ -291,6 +306,7 @@ export default function App() {
         amount: '',
         type: 'EXPENSE',
         account: 'SBI',
+        to_account: 'CASH',
         category: 'Other'
       });
       
@@ -309,7 +325,16 @@ export default function App() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (!res.ok) throw new Error('Failed to delete transaction');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          sessionStorage.removeItem('wealth_sense_token');
+          setIsAuthenticated(false);
+          alert('Session expired. Please log in again.');
+          return;
+        }
+        throw new Error(errData.error || 'Failed to delete transaction');
+      }
       fetchData();
     } catch (err) {
       alert(err.message);
@@ -319,10 +344,17 @@ export default function App() {
   // Edit Transaction
   const handleStartEdit = (tx) => {
     setEditingTransaction(tx);
-    setEditForm({ ...tx });
+    setEditForm({ 
+      ...tx,
+      to_account: tx.to_account || (tx.account === 'SBI' ? 'CASH' : 'SBI')
+    });
   };
 
   const handleSaveEdit = async () => {
+    if (editForm.type === 'TRANSFER' && (!editForm.to_account || editForm.account === editForm.to_account)) {
+      alert('Source and destination accounts cannot be the same.');
+      return;
+    }
     const token = sessionStorage.getItem('wealth_sense_token');
     try {
       const res = await fetch(`${API_BASE}/transactions/${editForm.id}/`, {
@@ -333,7 +365,16 @@ export default function App() {
         },
         body: JSON.stringify(editForm)
       });
-      if (!res.ok) throw new Error('Failed to update transaction');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          sessionStorage.removeItem('wealth_sense_token');
+          setIsAuthenticated(false);
+          alert('Session expired. Please log in again.');
+          return;
+        }
+        throw new Error(errData.error || 'Failed to update transaction');
+      }
       setEditingTransaction(null);
       setEditForm({});
       fetchData();
@@ -559,7 +600,7 @@ export default function App() {
   };
 
   const filteredTransactions = transactions.filter(t => {
-    const matchAcc = accountFilter === 'ALL' || t.account === accountFilter;
+    const matchAcc = accountFilter === 'ALL' || t.account === accountFilter || (t.type === 'TRANSFER' && t.to_account === accountFilter);
     const matchCat = categoryFilter === 'ALL' || t.category === categoryFilter;
     const matchType = typeFilter === 'ALL' || t.type === typeFilter;
     return matchAcc && matchCat && matchType;
@@ -574,7 +615,7 @@ export default function App() {
       }
       if (t.type === 'INCOME') {
         monthlyData[month].income += t.amount;
-      } else {
+      } else if (t.type === 'EXPENSE') {
         monthlyData[month].expense += t.amount;
       }
     });
@@ -901,7 +942,7 @@ export default function App() {
                 <label className="block text-xs font-semibold text-gray-400 mb-1.5">Description</label>
                 <input 
                   type="text" 
-                  placeholder="e.g. Swiggy Food order" 
+                  placeholder={manualForm.type === 'TRANSFER' ? `Transfer ${manualForm.account} to ${manualForm.to_account}` : "e.g. Swiggy Food order"} 
                   value={manualForm.description} 
                   onChange={(e) => setManualForm({...manualForm, description: e.target.value})}
                   className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
@@ -923,29 +964,80 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Type</label>
+                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Transaction Type</label>
                 <select 
                   value={manualForm.type} 
-                  onChange={(e) => setManualForm({...manualForm, type: e.target.value})}
+                  onChange={(e) => {
+                    const newType = e.target.value;
+                    let newToAcc = manualForm.to_account;
+                    let newCat = manualForm.category;
+                    if (newType === 'TRANSFER') {
+                      newCat = 'Self Transfer';
+                      if (!newToAcc || newToAcc === manualForm.account) {
+                        newToAcc = manualForm.account === 'SBI' ? 'CASH' : 'SBI';
+                      }
+                    }
+                    setManualForm({...manualForm, type: newType, to_account: newToAcc, category: newCat});
+                  }}
                   className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
                 >
-                  <option value="EXPENSE">Expense (Withdrawal)</option>
-                  <option value="INCOME">Income (Deposit)</option>
+                  <option value="EXPENSE">Expense (Withdrawal / Payment)</option>
+                  <option value="INCOME">Income (Deposit / Salary)</option>
+                  <option value="TRANSFER">⇄ Transfer (Bank ➔ Bank / Cash)</option>
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Account / Wallet</label>
-                <select 
-                  value={manualForm.account} 
-                  onChange={(e) => setManualForm({...manualForm, account: e.target.value})}
-                  className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                >
-                  <option value="SBI">SBI Bank</option>
-                  <option value="APGB">APGB Bank</option>
-                  <option value="CASH">Cash</option>
-                </select>
-              </div>
+              {manualForm.type === 'TRANSFER' ? (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-400 mb-1.5">From Account (Source)</label>
+                    <select 
+                      value={manualForm.account} 
+                      onChange={(e) => {
+                        const fromAcc = e.target.value;
+                        let toAcc = manualForm.to_account;
+                        if (toAcc === fromAcc) {
+                          toAcc = fromAcc === 'SBI' ? 'CASH' : 'SBI';
+                        }
+                        setManualForm({...manualForm, account: fromAcc, to_account: toAcc});
+                      }}
+                      className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                    >
+                      <option value="SBI">SBI Bank</option>
+                      <option value="APGB">APGB Bank</option>
+                      <option value="CASH">Cash Wallet</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-400 mb-1.5">To Account (Destination)</label>
+                    <select 
+                      value={manualForm.to_account || (manualForm.account === 'SBI' ? 'CASH' : 'SBI')} 
+                      onChange={(e) => setManualForm({...manualForm, to_account: e.target.value})}
+                      className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                    >
+                      {['SBI', 'APGB', 'CASH'].filter(acc => acc !== manualForm.account).map(acc => (
+                        <option key={acc} value={acc}>
+                          {acc === 'SBI' ? 'SBI Bank' : acc === 'APGB' ? 'APGB Bank' : 'Cash Wallet'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Account / Wallet</label>
+                  <select 
+                    value={manualForm.account} 
+                    onChange={(e) => setManualForm({...manualForm, account: e.target.value})}
+                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                  >
+                    <option value="SBI">SBI Bank</option>
+                    <option value="APGB">APGB Bank</option>
+                    <option value="CASH">Cash</option>
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-gray-400 mb-1.5">Category</label>
@@ -954,7 +1046,7 @@ export default function App() {
                   onChange={(e) => setManualForm({...manualForm, category: e.target.value})}
                   className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
                 >
-                  {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  {CATEGORIES.map(cat => <option key={cat} value={cat}>{getCategoryEmoji(cat)} {cat}</option>)}
                 </select>
               </div>
 
@@ -1008,6 +1100,7 @@ export default function App() {
                   <option value="ALL">All Types</option>
                   <option value="INCOME">Income only</option>
                   <option value="EXPENSE">Expense only</option>
+                  <option value="TRANSFER">Transfers only</option>
                 </select>
               </div>
             </div>
@@ -1046,22 +1139,30 @@ export default function App() {
                           </div>
                         </td>
                         <td className="px-4 py-3.5 whitespace-nowrap">
-                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                            tx.account === 'SBI' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 
-                            tx.account === 'APGB' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' : 
-                            'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                          }`}>
-                            {tx.account}
-                          </span>
+                          {tx.type === 'TRANSFER' ? (
+                            <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 inline-flex items-center gap-1">
+                              <span>{tx.account}</span>
+                              <span className="text-gray-400">➔</span>
+                              <span>{tx.to_account || 'Account'}</span>
+                            </span>
+                          ) : (
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                              tx.account === 'SBI' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 
+                              tx.account === 'APGB' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' : 
+                              'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                            }`}>
+                              {tx.account}
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-3.5 text-white font-medium max-w-xs truncate">{tx.description}</td>
                         <td className="px-4 py-3.5 whitespace-nowrap text-gray-300">
                           <span>{getCategoryEmoji(tx.category)} {tx.category}</span>
                         </td>
                         <td className={`px-4 py-3.5 font-semibold text-right whitespace-nowrap ${
-                          tx.type === 'INCOME' ? 'text-emerald-500' : 'text-rose-500'
+                          tx.type === 'INCOME' ? 'text-emerald-500' : tx.type === 'EXPENSE' ? 'text-rose-500' : 'text-indigo-400'
                         }`}>
-                          {tx.type === 'INCOME' ? '+' : '-'}₹{tx.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          {tx.type === 'INCOME' ? '+' : tx.type === 'EXPENSE' ? '-' : '⇄ '}₹{tx.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
                         <td className="px-4 py-3.5 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1">
@@ -1219,18 +1320,39 @@ export default function App() {
                   <label className="block text-xs font-semibold text-gray-400 mb-1.5">Type</label>
                   <select 
                     value={editForm.type || 'EXPENSE'} 
-                    onChange={(e) => setEditForm({...editForm, type: e.target.value})}
+                    onChange={(e) => {
+                      const newType = e.target.value;
+                      let newToAcc = editForm.to_account;
+                      let newCat = editForm.category;
+                      if (newType === 'TRANSFER') {
+                        newCat = 'Self Transfer';
+                        if (!newToAcc || newToAcc === editForm.account) {
+                          newToAcc = editForm.account === 'SBI' ? 'CASH' : 'SBI';
+                        }
+                      }
+                      setEditForm({...editForm, type: newType, to_account: newToAcc, category: newCat});
+                    }}
                     className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
                   >
                     <option value="EXPENSE">Expense</option>
                     <option value="INCOME">Income</option>
+                    <option value="TRANSFER">⇄ Transfer</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Account</label>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">
+                    {editForm.type === 'TRANSFER' ? 'From Account' : 'Account'}
+                  </label>
                   <select 
                     value={editForm.account || 'SBI'} 
-                    onChange={(e) => setEditForm({...editForm, account: e.target.value})}
+                    onChange={(e) => {
+                      const fromAcc = e.target.value;
+                      let toAcc = editForm.to_account;
+                      if (toAcc === fromAcc) {
+                        toAcc = fromAcc === 'SBI' ? 'CASH' : 'SBI';
+                      }
+                      setEditForm({...editForm, account: fromAcc, to_account: toAcc});
+                    }}
                     className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
                   >
                     <option value="SBI">SBI Bank</option>
@@ -1238,17 +1360,48 @@ export default function App() {
                     <option value="CASH">Cash</option>
                   </select>
                 </div>
+
+                {editForm.type === 'TRANSFER' ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-400 mb-1.5">To Account</label>
+                    <select 
+                      value={editForm.to_account || (editForm.account === 'SBI' ? 'CASH' : 'SBI')} 
+                      onChange={(e) => setEditForm({...editForm, to_account: e.target.value})}
+                      className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                    >
+                      {['SBI', 'APGB', 'CASH'].filter(acc => acc !== editForm.account).map(acc => (
+                        <option key={acc} value={acc}>
+                          {acc === 'SBI' ? 'SBI Bank' : acc === 'APGB' ? 'APGB Bank' : 'Cash Wallet'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-400 mb-1.5">Category</label>
+                    <select 
+                      value={editForm.category || 'Other'} 
+                      onChange={(e) => setEditForm({...editForm, category: e.target.value})}
+                      className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                    >
+                      {CATEGORIES.map(cat => <option key={cat} value={cat}>{getCategoryEmoji(cat)} {cat}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {editForm.type === 'TRANSFER' && (
                 <div>
                   <label className="block text-xs font-semibold text-gray-400 mb-1.5">Category</label>
                   <select 
-                    value={editForm.category || 'Other'} 
+                    value={editForm.category || 'Self Transfer'} 
                     onChange={(e) => setEditForm({...editForm, category: e.target.value})}
                     className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
                   >
                     {CATEGORIES.map(cat => <option key={cat} value={cat}>{getCategoryEmoji(cat)} {cat}</option>)}
                   </select>
                 </div>
-              </div>
+              )}
 
               <div className="flex justify-end gap-3 pt-2">
                 <button 

@@ -1,17 +1,16 @@
 import json
 import os
-import uuid
 from decimal import Decimal
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import render
 from django.utils.dateparse import parse_date, parse_datetime
+from django.core.signing import TimestampSigner, BadSignature, SignatureExpired
 from .models import Transaction, Category
 from .parser import parse_statement_text, auto_categorize, extract_text_from_pdf, parse_excel_or_csv
 
 
-# In-memory active session tokens
-ACTIVE_SESSIONS = set()
+SIGNER_SALT = 'wealth_sense_auth_salt_v1'
 
 # Load credentials from environment with default fallbacks
 def get_auth_credentials():
@@ -23,31 +22,44 @@ def get_auth_credentials():
 
 def verify_token(request):
     """
-    Checks the request's Authorization header.
-    Returns True if valid, False otherwise.
+    Checks the request's Authorization header using cryptographically signed tokens.
+    Persistent across multiple server processes and restarts.
     """
     auth_header = request.headers.get('Authorization', '')
     if auth_header.startswith('Bearer '):
         token = auth_header.split(' ')[1]
-        if token in ACTIVE_SESSIONS:
+        try:
+            signer = TimestampSigner(salt=SIGNER_SALT)
+            # Token valid for 30 days
+            signer.unsign(token, max_age=86400 * 30)
             return True
+        except (BadSignature, SignatureExpired):
+            return False
     return False
 
 def _parse_date_or_datetime(value):
     """Parse a date string, accepting both date-only and datetime formats."""
     if not value:
         return None
-    # Try datetime first (e.g. 2026-07-31T14:30)
     dt = parse_datetime(value)
     if dt:
         return dt
-    # Fallback to date-only (e.g. 2026-07-31)
     d = parse_date(value)
     if d:
         from django.utils import timezone
         import datetime
         return timezone.make_aware(datetime.datetime.combine(d, datetime.time()))
     return None
+
+def _parse_amount(value):
+    """Sanitize and parse decimal amount."""
+    if value is None or value == '':
+        raise ValueError('Amount cannot be empty')
+    cleaned = str(value).replace('₹', '').replace('$', '').replace(',', '').strip()
+    amt = Decimal(cleaned)
+    if amt <= 0:
+        raise ValueError('Amount must be greater than 0')
+    return amt
 
 def _serialize_transaction(t):
     """Serialize a Transaction instance to a dict."""
@@ -58,6 +70,7 @@ def _serialize_transaction(t):
         'amount': float(t.amount),
         'type': t.type,
         'account': t.account,
+        'to_account': t.to_account,
         'category': t.category
     }
 
@@ -73,8 +86,8 @@ def auth_login(request):
             creds = get_auth_credentials()
             
             if username == creds['username'] and password == creds['password'] and pin == creds['pin']:
-                token = str(uuid.uuid4())
-                ACTIVE_SESSIONS.add(token)
+                signer = TimestampSigner(salt=SIGNER_SALT)
+                token = signer.sign(username)
                 return JsonResponse({'success': True, 'token': token})
             else:
                 return JsonResponse({'success': False, 'error': 'Invalid credentials or PIN'}, status=401)
@@ -90,12 +103,17 @@ def transaction_list_create(request):
     if request.method == 'GET':
         account_filter = request.GET.get('account', None)
         category_filter = request.GET.get('category', None)
+        type_filter = request.GET.get('type', None)
         
         transactions = Transaction.objects.all()
-        if account_filter:
-            transactions = transactions.filter(account=account_filter)
-        if category_filter:
+        if account_filter and account_filter != 'ALL':
+            from django.db.models import Q
+            # Include if account matches source or destination
+            transactions = transactions.filter(Q(account=account_filter) | Q(to_account=account_filter))
+        if category_filter and category_filter != 'ALL':
             transactions = transactions.filter(category=category_filter)
+        if type_filter and type_filter != 'ALL':
+            transactions = transactions.filter(type=type_filter)
             
         data = [_serialize_transaction(t) for t in transactions]
         return JsonResponse(data, safe=False)
@@ -107,15 +125,42 @@ def transaction_list_create(request):
             if not dt:
                 from django.utils import timezone
                 dt = timezone.now()
+                
+            amount = _parse_amount(body.get('amount'))
+            t_type = body.get('type', 'EXPENSE')
+            account = body.get('account', 'CASH')
+            to_account = body.get('to_account', None)
+            category = body.get('category', 'Other')
+            
+            if t_type == 'TRANSFER':
+                if not to_account:
+                    return JsonResponse({'error': 'Destination (To Account) is required for transfer'}, status=400)
+                if account == to_account:
+                    return JsonResponse({'error': 'Source and Destination accounts cannot be the same'}, status=400)
+                if category == 'Other':
+                    category = 'Self Transfer'
+            else:
+                to_account = None
+
+            description = body.get('description', '').strip()
+            if not description:
+                if t_type == 'TRANSFER':
+                    description = f"Transfer {account} to {to_account}"
+                else:
+                    description = f"{category} Transaction"
+
             t = Transaction.objects.create(
                 date=dt,
-                description=body.get('description', 'Manual Transaction'),
-                amount=Decimal(str(body.get('amount', 0))),
-                type=body.get('type', 'EXPENSE'),
-                account=body.get('account', 'CASH'),
-                category=body.get('category', 'Other')
+                description=description,
+                amount=amount,
+                type=t_type,
+                account=account,
+                to_account=to_account,
+                category=category
             )
             return JsonResponse(_serialize_transaction(t), status=201)
+        except ValueError as ve:
+            return JsonResponse({'error': str(ve)}, status=400)
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)
 
@@ -142,17 +187,30 @@ def transaction_detail(request, pk):
                 if dt:
                     t.date = dt
             if 'description' in body:
-                t.description = body['description']
+                t.description = body['description'].strip()
             if 'amount' in body:
-                t.amount = Decimal(str(body['amount']))
+                t.amount = _parse_amount(body['amount'])
             if 'type' in body:
                 t.type = body['type']
             if 'account' in body:
                 t.account = body['account']
+            if 'to_account' in body:
+                t.to_account = body['to_account'] if t.type == 'TRANSFER' else None
             if 'category' in body:
                 t.category = body['category']
+
+            if t.type == 'TRANSFER':
+                if not t.to_account:
+                    return JsonResponse({'error': 'Destination account is required for transfer'}, status=400)
+                if t.account == t.to_account:
+                    return JsonResponse({'error': 'Source and Destination accounts cannot be the same'}, status=400)
+            else:
+                t.to_account = None
+
             t.save()
             return JsonResponse(_serialize_transaction(t), status=200)
+        except ValueError as ve:
+            return JsonResponse({'error': str(ve)}, status=400)
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)
     
@@ -220,7 +278,6 @@ def parse_statement(request):
         
     if request.method == 'POST':
         try:
-            # Check for file upload (CSV or Excel)
             if request.FILES:
                 file_obj = request.FILES.get('file')
                 if not file_obj:
@@ -229,7 +286,6 @@ def parse_statement(request):
                 parsed_transactions = parse_excel_or_csv(file_obj)
                 return JsonResponse(parsed_transactions, safe=False)
             else:
-                # Text pasting or direct JSON body list
                 body = json.loads(request.body)
                 parsed_transactions = body.get('transactions', [])
                 return JsonResponse(parsed_transactions, safe=False)
@@ -252,20 +308,26 @@ def bulk_import(request):
             created_transactions = []
             for item in transactions_data:
                 category = item.get('category', 'Other')
+                t_type = item.get('type', 'EXPENSE')
+                to_acc = item.get('to_account', None)
+                
                 if category == 'Other':
-                    category = auto_categorize(item.get('description', ''), item.get('type', 'EXPENSE'))
+                    category = auto_categorize(item.get('description', ''), t_type)
                 
                 dt = _parse_date_or_datetime(item.get('date'))
                 if not dt:
                     from django.utils import timezone
                     dt = timezone.now()
-                    
+                
+                amt = _parse_amount(item.get('amount', 0))
+                
                 t = Transaction.objects.create(
                     date=dt,
                     description=item.get('description', 'Imported transaction'),
-                    amount=Decimal(str(item.get('amount', 0))),
-                    type=item.get('type', 'EXPENSE'),
+                    amount=amt,
+                    type=t_type,
                     account=account,
+                    to_account=to_acc,
                     category=category
                 )
                 created_transactions.append(_serialize_transaction(t))
@@ -279,15 +341,30 @@ def financial_insights(request):
         return JsonResponse({'error': 'Unauthorized'}, status=401)
         
     if request.method == 'GET':
-        transactions = Transaction.objects.all()
+        transactions = list(Transaction.objects.all())
         
+        # Total Income & Expense (Transfers excluded from income/expense to preserve true budget)
         total_income = sum(t.amount for t in transactions if t.type == 'INCOME')
         total_expense = sum(t.amount for t in transactions if t.type == 'EXPENSE')
+        total_transferred = sum(t.amount for t in transactions if t.type == 'TRANSFER')
         net_savings = total_income - total_expense
         
-        sbi_balance = sum((t.amount if t.type == 'INCOME' else -t.amount) for t in transactions if t.account == 'SBI')
-        apgb_balance = sum((t.amount if t.type == 'INCOME' else -t.amount) for t in transactions if t.account == 'APGB')
-        cash_balance = sum((t.amount if t.type == 'INCOME' else -t.amount) for t in transactions if t.account == 'CASH')
+        def calculate_account_balance(acc_code):
+            bal = Decimal('0.00')
+            for t in transactions:
+                if t.account == acc_code:
+                    if t.type == 'INCOME':
+                        bal += t.amount
+                    elif t.type in ('EXPENSE', 'TRANSFER'):
+                        bal -= t.amount
+                if t.type == 'TRANSFER' and t.to_account == acc_code:
+                    bal += t.amount
+            return float(bal)
+
+        sbi_balance = calculate_account_balance('SBI')
+        apgb_balance = calculate_account_balance('APGB')
+        cash_balance = calculate_account_balance('CASH')
+        total_capital = sbi_balance + apgb_balance + cash_balance
         
         categories = {}
         for t in transactions:
@@ -349,13 +426,14 @@ def financial_insights(request):
         return JsonResponse({
             'total_income': float(total_income),
             'total_expense': float(total_expense),
+            'total_transferred': float(total_transferred),
             'net_savings': float(net_savings),
             'savings_rate': round(savings_rate, 2),
             'balances': {
-                'SBI': float(sbi_balance),
-                'APGB': float(apgb_balance),
-                'CASH': float(cash_balance),
-                'total': float(sbi_balance + apgb_balance + cash_balance)
+                'SBI': sbi_balance,
+                'APGB': apgb_balance,
+                'CASH': cash_balance,
+                'total': total_capital
             },
             'categories': category_data,
             'advice': advice
