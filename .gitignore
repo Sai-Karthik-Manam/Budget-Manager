@@ -33,4 +33,3 @@ venv/
 
 # Frontend
 node_modules/
-dist/
