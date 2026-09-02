@@ -18,6 +18,7 @@ class Category(models.Model):
 class Transaction(models.Model):
     ACCOUNT_CHOICES = [
         ('APGB', 'APGB Bank'),
+        ('HDFC', 'HDFC Bank'),
         ('SBI', 'SBI Bank'),
         ('CASH', 'Cash'),
     ]

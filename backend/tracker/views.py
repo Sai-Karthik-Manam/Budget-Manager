@@ -363,8 +363,9 @@ def financial_insights(request):
 
         sbi_balance = calculate_account_balance('SBI')
         apgb_balance = calculate_account_balance('APGB')
+        hdfc_balance = calculate_account_balance('HDFC')
         cash_balance = calculate_account_balance('CASH')
-        total_capital = sbi_balance + apgb_balance + cash_balance
+        total_capital = sbi_balance + apgb_balance + hdfc_balance + cash_balance
         
         categories = {}
         for t in transactions:
@@ -409,6 +410,12 @@ def financial_insights(request):
                 'title': 'Low Balance: APGB',
                 'description': 'Your APGB balance is below ₹1,000. Consider topping it up from Cash.'
             })
+        if hdfc_balance < 2500 and hdfc_balance > 0:
+            advice.append({
+                'type': 'info',
+                'title': 'Low Balance: HDFC',
+                'description': 'Your HDFC balance is below ₹2,500. Be cautious of minimum balance rules.'
+            })
             
         if not advice:
             advice.append({
@@ -432,6 +439,7 @@ def financial_insights(request):
             'balances': {
                 'SBI': sbi_balance,
                 'APGB': apgb_balance,
+                'HDFC': hdfc_balance,
                 'CASH': cash_balance,
                 'total': total_capital
             },

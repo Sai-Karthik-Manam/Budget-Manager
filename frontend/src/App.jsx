@@ -871,6 +871,17 @@ export default function App() {
                 <div className="text-xl font-bold text-white mt-1">₹{insights.balances.APGB.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
               </div>
 
+              {/* HDFC Card */}
+              <div className="bg-[#1E293B]/30 hover:bg-[#1E293B]/50 border border-[#232D45] rounded-xl p-4 transition-all">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-sm font-semibold text-white flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-purple-500"></span> HDFC Bank
+                  </span>
+                  <span className="text-xs font-semibold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-500/10">Active</span>
+                </div>
+                <div className="text-xl font-bold text-white mt-1">₹{(insights.balances.HDFC || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+              </div>
+
               {/* Cash Card */}
               <div className="bg-[#1E293B]/30 hover:bg-[#1E293B]/50 border border-[#232D45] rounded-xl p-4 transition-all">
                 <div className="flex justify-between items-center mb-1">
@@ -1009,6 +1020,7 @@ export default function App() {
                     >
                       <option value="SBI">SBI Bank</option>
                       <option value="APGB">APGB Bank</option>
+                      <option value="HDFC">HDFC Bank</option>
                       <option value="CASH">Cash Wallet</option>
                     </select>
                   </div>
@@ -1020,9 +1032,9 @@ export default function App() {
                       onChange={(e) => setManualForm({...manualForm, to_account: e.target.value})}
                       className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
                     >
-                      {['SBI', 'APGB', 'CASH'].filter(acc => acc !== manualForm.account).map(acc => (
+                      {['SBI', 'APGB', 'HDFC', 'CASH'].filter(acc => acc !== manualForm.account).map(acc => (
                         <option key={acc} value={acc}>
-                          {acc === 'SBI' ? 'SBI Bank' : acc === 'APGB' ? 'APGB Bank' : 'Cash Wallet'}
+                          {acc === 'SBI' ? 'SBI Bank' : acc === 'APGB' ? 'APGB Bank' : acc === 'HDFC' ? 'HDFC Bank' : 'Cash Wallet'}
                         </option>
                       ))}
                     </select>
@@ -1038,6 +1050,7 @@ export default function App() {
                   >
                     <option value="SBI">SBI Bank</option>
                     <option value="APGB">APGB Bank</option>
+                    <option value="HDFC">HDFC Bank</option>
                     <option value="CASH">Cash</option>
                   </select>
                 </div>
@@ -1084,6 +1097,7 @@ export default function App() {
                   <option value="ALL">All Accounts</option>
                   <option value="SBI">SBI Bank</option>
                   <option value="APGB">APGB Bank</option>
+                  <option value="HDFC">HDFC Bank</option>
                   <option value="CASH">Cash</option>
                 </select>
 
@@ -1153,6 +1167,7 @@ export default function App() {
                             <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
                               tx.account === 'SBI' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 
                               tx.account === 'APGB' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' : 
+                              tx.account === 'HDFC' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' : 
                               'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                             }`}>
                               {tx.account}
@@ -1361,6 +1376,7 @@ export default function App() {
                   >
                     <option value="SBI">SBI Bank</option>
                     <option value="APGB">APGB Bank</option>
+                    <option value="HDFC">HDFC Bank</option>
                     <option value="CASH">Cash</option>
                   </select>
                 </div>
@@ -1373,9 +1389,9 @@ export default function App() {
                       onChange={(e) => setEditForm({...editForm, to_account: e.target.value})}
                       className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
                     >
-                      {['SBI', 'APGB', 'CASH'].filter(acc => acc !== editForm.account).map(acc => (
+                      {['SBI', 'APGB', 'HDFC', 'CASH'].filter(acc => acc !== editForm.account).map(acc => (
                         <option key={acc} value={acc}>
-                          {acc === 'SBI' ? 'SBI Bank' : acc === 'APGB' ? 'APGB Bank' : 'Cash Wallet'}
+                          {acc === 'SBI' ? 'SBI Bank' : acc === 'APGB' ? 'APGB Bank' : acc === 'HDFC' ? 'HDFC Bank' : 'Cash Wallet'}
                         </option>
                       ))}
                     </select>
@@ -1578,6 +1594,7 @@ export default function App() {
                             >
                               <option value="SBI">SBI Bank Account</option>
                               <option value="APGB">APGB Bank Account</option>
+                              <option value="HDFC">HDFC Bank Account</option>
                               <option value="CASH">Cash / Wallet</option>
                             </select>
                           </div>
@@ -1638,6 +1655,7 @@ export default function App() {
                           >
                             <option value="SBI">SBI Bank Account</option>
                             <option value="APGB">APGB Bank Account</option>
+                            <option value="HDFC">HDFC Bank Account</option>
                             <option value="CASH">Cash / Wallet</option>
                           </select>
                         </div>
