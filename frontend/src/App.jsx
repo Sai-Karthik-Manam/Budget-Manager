@@ -22,7 +22,8 @@ import {
   Pencil,
   Settings,
   Bell,
-  BellOff
+  BellOff,
+  Users
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -67,10 +68,12 @@ export default function App() {
   const [insights, setInsights] = useState({
     total_income: 0,
     total_expense: 0,
+    total_transferred: 0,
     net_savings: 0,
     savings_rate: 0,
-    balances: { SBI: 0, APGB: 0, CASH: 0, total: 0 },
+    balances: { SBI: 0, APGB: 0, HDFC: 0, CASH: 0, total: 0 },
     categories: [],
+    debts: { owed_to_me: {}, owed_by_me: {} },
     advice: []
   });
   
@@ -87,7 +90,8 @@ export default function App() {
     type: 'EXPENSE',
     account: 'SBI',
     to_account: 'CASH',
-    category: 'Other'
+    category: 'Other',
+    contact_name: ''
   });
 
   // Statement Parser state
@@ -311,7 +315,8 @@ export default function App() {
         type: 'EXPENSE',
         account: 'SBI',
         to_account: 'CASH',
-        category: 'Other'
+        category: 'Other',
+        contact_name: ''
       });
       
       fetchData();
@@ -896,6 +901,51 @@ export default function App() {
           </div>
         </div>
 
+        {/* Debts & Credits Summary — mobile order-5.5, desktop stays in left col */}
+        <div className="order-5 lg:order-none lg:col-span-1 lg:row-span-1">
+          <div className="glass-panel p-6 rounded-2xl flex flex-col gap-4">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Users className="h-5 w-5 text-fuchsia-400" /> Lending & Borrowing
+            </h3>
+            
+            <div className="flex flex-col gap-4">
+              {/* People Who Owe Me */}
+              <div>
+                <h4 className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">People who owe me</h4>
+                {Object.keys(insights.debts?.owed_to_me || {}).length === 0 ? (
+                  <div className="text-xs text-gray-500 italic bg-[#1E293B]/20 p-3 rounded-xl text-center border border-[#232D45]/50">No pending payments</div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {Object.entries(insights.debts.owed_to_me).map(([person, amount]) => (
+                      <div key={person} className="bg-[#1E293B]/30 hover:bg-[#1E293B]/50 border border-[#232D45] rounded-xl p-3 flex justify-between items-center transition-all">
+                        <span className="text-sm font-semibold text-white">{person}</span>
+                        <span className="text-sm font-bold text-emerald-400">₹{amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* People I Owe */}
+              <div>
+                <h4 className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">People I owe</h4>
+                {Object.keys(insights.debts?.owed_by_me || {}).length === 0 ? (
+                  <div className="text-xs text-gray-500 italic bg-[#1E293B]/20 p-3 rounded-xl text-center border border-[#232D45]/50">No pending debts</div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {Object.entries(insights.debts.owed_by_me).map(([person, amount]) => (
+                      <div key={person} className="bg-[#1E293B]/30 hover:bg-[#1E293B]/50 border border-[#232D45] rounded-xl p-3 flex justify-between items-center transition-all">
+                        <span className="text-sm font-semibold text-white">{person}</span>
+                        <span className="text-sm font-bold text-rose-400">₹{amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Financial Advisor Advice — mobile order-6, desktop stays in left col */}
         <div className="order-6 lg:order-none lg:col-span-1 lg:row-span-1">
           <div className="glass-panel p-6 rounded-2xl flex flex-col gap-4">
@@ -991,6 +1041,8 @@ export default function App() {
                       if (!newToAcc || newToAcc === manualForm.account) {
                         newToAcc = manualForm.account === 'SBI' ? 'CASH' : 'SBI';
                       }
+                    } else if (['LENT', 'BORROWED', 'REPAYMENT_RECEIVED', 'REPAYMENT_MADE'].includes(newType)) {
+                      newCat = 'Other';
                     }
                     setManualForm({...manualForm, type: newType, to_account: newToAcc, category: newCat});
                   }}
@@ -999,6 +1051,12 @@ export default function App() {
                   <option value="EXPENSE">Expense (Withdrawal / Payment)</option>
                   <option value="INCOME">Income (Deposit / Salary)</option>
                   <option value="TRANSFER">⇄ Transfer (Bank ➔ Bank / Cash)</option>
+                  <optgroup label="Debts & Credits">
+                    <option value="LENT">🤝 I Lent Money (Given)</option>
+                    <option value="REPAYMENT_RECEIVED">✅ Repayment Received (Got Back)</option>
+                    <option value="BORROWED">🤲 I Borrowed Money (Received)</option>
+                    <option value="REPAYMENT_MADE">💸 Repayment Made (Paid Back)</option>
+                  </optgroup>
                 </select>
               </div>
 
@@ -1056,16 +1114,30 @@ export default function App() {
                 </div>
               )}
 
-              <div>
-                <label className="block text-xs font-semibold text-gray-400 mb-1.5">Category</label>
-                <select 
-                  value={manualForm.category} 
-                  onChange={(e) => setManualForm({...manualForm, category: e.target.value})}
-                  className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                >
-                  {CATEGORIES.map(cat => <option key={cat} value={cat}>{getCategoryEmoji(cat)} {cat}</option>)}
-                </select>
-              </div>
+              {['LENT', 'BORROWED', 'REPAYMENT_RECEIVED', 'REPAYMENT_MADE'].includes(manualForm.type) ? (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Person's Name</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. John Doe"
+                    value={manualForm.contact_name} 
+                    onChange={(e) => setManualForm({...manualForm, contact_name: e.target.value})}
+                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                    required
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">Category</label>
+                  <select 
+                    value={manualForm.category} 
+                    onChange={(e) => setManualForm({...manualForm, category: e.target.value})}
+                    className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                  >
+                    {CATEGORIES.map(cat => <option key={cat} value={cat}>{getCategoryEmoji(cat)} {cat}</option>)}
+                  </select>
+                </div>
+              )}
 
               <div className="md:col-span-3 flex justify-end">
                 <button 
@@ -1176,12 +1248,20 @@ export default function App() {
                         </td>
                         <td className="px-4 py-3.5 text-white font-medium max-w-xs truncate">{tx.description}</td>
                         <td className="px-4 py-3.5 whitespace-nowrap text-gray-300">
-                          <span>{getCategoryEmoji(tx.category)} {tx.category}</span>
+                          {['LENT', 'BORROWED', 'REPAYMENT_RECEIVED', 'REPAYMENT_MADE'].includes(tx.type) ? (
+                            <span className="flex items-center gap-1.5 text-xs font-semibold bg-gray-500/10 text-gray-300 px-2 py-0.5 rounded-full w-fit">
+                              <Users className="h-3 w-3" /> {tx.contact_name || 'Unknown'}
+                            </span>
+                          ) : (
+                            <span>{getCategoryEmoji(tx.category)} {tx.category}</span>
+                          )}
                         </td>
                         <td className={`px-4 py-3.5 font-semibold text-right whitespace-nowrap ${
-                          tx.type === 'INCOME' ? 'text-emerald-500' : tx.type === 'EXPENSE' ? 'text-rose-500' : 'text-indigo-400'
+                          ['INCOME', 'BORROWED', 'REPAYMENT_RECEIVED'].includes(tx.type) ? 'text-emerald-500' : 
+                          ['EXPENSE', 'LENT', 'REPAYMENT_MADE'].includes(tx.type) ? 'text-rose-500' : 'text-indigo-400'
                         }`}>
-                          {tx.type === 'INCOME' ? '+' : tx.type === 'EXPENSE' ? '-' : '⇄ '}₹{tx.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          {['INCOME', 'BORROWED', 'REPAYMENT_RECEIVED'].includes(tx.type) ? '+' : 
+                           ['EXPENSE', 'LENT', 'REPAYMENT_MADE'].includes(tx.type) ? '-' : '⇄ '}₹{tx.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </td>
                         <td className="px-4 py-3.5 text-center whitespace-nowrap">
                           <div className="flex items-center justify-center gap-1">
@@ -1356,6 +1436,12 @@ export default function App() {
                     <option value="EXPENSE">Expense</option>
                     <option value="INCOME">Income</option>
                     <option value="TRANSFER">⇄ Transfer</option>
+                    <optgroup label="Debts & Credits">
+                      <option value="LENT">🤝 I Lent Money (Given)</option>
+                      <option value="REPAYMENT_RECEIVED">✅ Repayment Received (Got Back)</option>
+                      <option value="BORROWED">🤲 I Borrowed Money (Received)</option>
+                      <option value="REPAYMENT_MADE">💸 Repayment Made (Paid Back)</option>
+                    </optgroup>
                   </select>
                 </div>
                 <div>
@@ -1395,6 +1481,18 @@ export default function App() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                ) : ['LENT', 'BORROWED', 'REPAYMENT_RECEIVED', 'REPAYMENT_MADE'].includes(editForm.type) ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-400 mb-1.5">Person's Name</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. John Doe"
+                      value={editForm.contact_name || ''} 
+                      onChange={(e) => setEditForm({...editForm, contact_name: e.target.value})}
+                      className="w-full bg-[#0F172A] border border-[#232D45] rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                      required
+                    />
                   </div>
                 ) : (
                   <div>

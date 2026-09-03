@@ -71,7 +71,8 @@ def _serialize_transaction(t):
         'type': t.type,
         'account': t.account,
         'to_account': t.to_account,
-        'category': t.category
+        'category': t.category,
+        'contact_name': t.contact_name
     }
 
 @csrf_exempt
@@ -131,6 +132,10 @@ def transaction_list_create(request):
             account = body.get('account', 'CASH')
             to_account = body.get('to_account', None)
             category = body.get('category', 'Other')
+            contact_name = body.get('contact_name', None)
+
+            if contact_name:
+                contact_name = contact_name.strip().title()
             
             if t_type == 'TRANSFER':
                 if not to_account:
@@ -142,10 +147,18 @@ def transaction_list_create(request):
             else:
                 to_account = None
 
+            if t_type in ['LENT', 'BORROWED', 'REPAYMENT_RECEIVED', 'REPAYMENT_MADE']:
+                if not contact_name:
+                    contact_name = 'Unknown Person'
+
             description = body.get('description', '').strip()
             if not description:
                 if t_type == 'TRANSFER':
                     description = f"Transfer {account} to {to_account}"
+                elif t_type in ['LENT', 'REPAYMENT_MADE']:
+                    description = f"Paid {contact_name}"
+                elif t_type in ['BORROWED', 'REPAYMENT_RECEIVED']:
+                    description = f"Received from {contact_name}"
                 else:
                     description = f"{category} Transaction"
 
@@ -156,7 +169,8 @@ def transaction_list_create(request):
                 type=t_type,
                 account=account,
                 to_account=to_account,
-                category=category
+                category=category,
+                contact_name=contact_name
             )
             return JsonResponse(_serialize_transaction(t), status=201)
         except ValueError as ve:
@@ -198,6 +212,8 @@ def transaction_detail(request, pk):
                 t.to_account = body['to_account'] if t.type == 'TRANSFER' else None
             if 'category' in body:
                 t.category = body['category']
+            if 'contact_name' in body:
+                t.contact_name = body['contact_name'].strip().title() if body['contact_name'] else None
 
             if t.type == 'TRANSFER':
                 if not t.to_account:
@@ -206,6 +222,10 @@ def transaction_detail(request, pk):
                     return JsonResponse({'error': 'Source and Destination accounts cannot be the same'}, status=400)
             else:
                 t.to_account = None
+                
+            if t.type in ['LENT', 'BORROWED', 'REPAYMENT_RECEIVED', 'REPAYMENT_MADE']:
+                if not t.contact_name:
+                    t.contact_name = 'Unknown Person'
 
             t.save()
             return JsonResponse(_serialize_transaction(t), status=200)
@@ -353,9 +373,9 @@ def financial_insights(request):
             bal = Decimal('0.00')
             for t in transactions:
                 if t.account == acc_code:
-                    if t.type == 'INCOME':
+                    if t.type in ('INCOME', 'BORROWED', 'REPAYMENT_RECEIVED'):
                         bal += t.amount
-                    elif t.type in ('EXPENSE', 'TRANSFER'):
+                    elif t.type in ('EXPENSE', 'TRANSFER', 'LENT', 'REPAYMENT_MADE'):
                         bal -= t.amount
                 if t.type == 'TRANSFER' and t.to_account == acc_code:
                     bal += t.amount
@@ -368,12 +388,32 @@ def financial_insights(request):
         total_capital = sbi_balance + apgb_balance + hdfc_balance + cash_balance
         
         categories = {}
+        owed_to_me = {}
+        owed_by_me = {}
+
         for t in transactions:
             if t.type == 'EXPENSE':
                 categories[t.category] = categories.get(t.category, 0) + float(t.amount)
+            elif t.type == 'LENT':
+                name = t.contact_name or 'Unknown'
+                owed_to_me[name] = owed_to_me.get(name, 0.0) + float(t.amount)
+            elif t.type == 'REPAYMENT_RECEIVED':
+                name = t.contact_name or 'Unknown'
+                owed_to_me[name] = owed_to_me.get(name, 0.0) - float(t.amount)
+            elif t.type == 'BORROWED':
+                name = t.contact_name or 'Unknown'
+                owed_by_me[name] = owed_by_me.get(name, 0.0) + float(t.amount)
+            elif t.type == 'REPAYMENT_MADE':
+                name = t.contact_name or 'Unknown'
+                owed_by_me[name] = owed_by_me.get(name, 0.0) - float(t.amount)
                 
         category_data = [{'category': cat, 'amount': amt} for cat, amt in categories.items()]
         category_data = sorted(category_data, key=lambda x: x['amount'], reverse=True)
+
+        debts = {
+            'owed_to_me': {k: v for k, v in owed_to_me.items() if v > 0},
+            'owed_by_me': {k: v for k, v in owed_by_me.items() if v > 0}
+        }
         
         savings_rate = 0.0
         if total_income > 0:
@@ -444,5 +484,6 @@ def financial_insights(request):
                 'total': total_capital
             },
             'categories': category_data,
+            'debts': debts,
             'advice': advice
         })
